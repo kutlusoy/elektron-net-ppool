@@ -16,7 +16,7 @@ import { ClientModule } from './ORM/client/client.module';
 import { RpcBlocksModule } from './ORM/rpc-block/rpc-block.module';
 import { TelegramSubscriptionsModule } from './ORM/telegram-subscriptions/telegram-subscriptions.module';
 import { AppService } from './services/app.service';
-import { BitcoinRpcService } from './services/bitcoin-rpc.service';
+import { BitcoinRpcModule } from './services/bitcoin-rpc.module';
 import { LogRotationService } from './services/log-rotation.service';
 import { BraiinsService } from './services/braiins.service';
 import { BTCPayService } from './services/btc-pay.service';
@@ -70,6 +70,7 @@ const ORMModules = [
         ScheduleModule.forRoot(),
         HttpModule,
         NotificationModule,
+        BitcoinRpcModule,
         AuthModule,
         PplnsModule,
         ...ORMModules
@@ -85,7 +86,6 @@ const ORMModules = [
     providers: [
         AppService,
         StratumV1Service,
-        BitcoinRpcService,
         BitcoinAddressValidator,
         StratumV1JobsService,
         BTCPayService,
