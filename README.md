@@ -113,6 +113,30 @@ for the recommended topology (VPN-tunnelled wallet RPC, pruned pool node,
 unpruned wallet node). This is a configuration change only, no code change
 needed.
 
+### If the pool wallet is encrypted (password-protected)
+
+Set `WALLET_PASSPHRASE` in `.env`. Without it, every real payout attempt
+fails with RPC error `-13` ("Please enter the wallet passphrase with
+walletpassphrase first") and that miner's balance just stays queued forever
+— `PayoutSchedulerService` retries every cycle but can never succeed without
+the passphrase.
+
+`WalletRpcService.sendManySats()` unlocks the wallet (`walletpassphrase`) for
+`WALLET_UNLOCK_SECONDS` (default `60`) immediately before each `sendmany`
+call and explicitly re-locks it (`walletlock`) right after — it is
+deliberately **not** left unlocked for the full `PAYOUT_INTERVAL_MINUTES`
+between cycles, since that would defeat most of the point of encrypting the
+wallet in the first place. `WALLET_PASSPHRASE` is exactly as sensitive as
+`WALLET_RPC_PASSWORD`; treat it the same way — restrict its file
+permissions, never commit it, and keep it on the separate wallet server from
+§9 above rather than the internet-facing pool server, if you're following
+that topology.
+
+If the wallet is **not** encrypted (Bitcoin Core's default), leave
+`WALLET_PASSPHRASE` unset — the pool skips the unlock/lock calls entirely,
+since calling `walletpassphrase`/`walletlock` against an unencrypted wallet
+is itself an RPC error ("running with an unencrypted wallet").
+
 Before your first live payout, run with `PAYOUT_DRY_RUN=true` and confirm
 the logged payout batches look correct — the scheduler will log what it
 would pay without calling `sendmany` or touching the payout ledger.

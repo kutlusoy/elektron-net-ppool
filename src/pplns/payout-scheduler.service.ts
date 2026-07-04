@@ -64,7 +64,11 @@ export class PayoutSchedulerService implements OnModuleInit {
             // on the wallet side first (§9.3.3) — the safest default is to
             // leave the ledger rows PENDING and retry next cycle, and require
             // an operator to check the wallet log/mempool if this repeats.
-            console.error(`PPLNS payout batch failed (will retry next cycle): ${e?.message ?? e}`);
+            // RPC code -13 specifically means the wallet is encrypted and
+            // WALLET_PASSPHRASE isn't set (or is wrong) — call that out
+            // explicitly since it's the most common first-deployment mistake.
+            const hint = e?.code === -13 ? ' (wallet is encrypted — set WALLET_PASSPHRASE in .env)' : '';
+            console.error(`PPLNS payout batch failed (will retry next cycle)${hint}: ${e?.message ?? e}`);
             return;
         }
 
