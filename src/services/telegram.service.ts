@@ -54,6 +54,21 @@ export class TelegramService implements OnModuleInit {
         }));
     }
 
+    // Phase 2 (concept doc §11): opt-in per miner via account settings
+    // (notifyOnPayout), reusing the same /subscribe chat link as block-found
+    // notifications -- a miner who hasn't run /subscribe simply gets no
+    // message here since there's no chat to send it to.
+    public async notifyPayoutSent(address: string, amountSats: number, txid: string) {
+        if (this.bot == null) {
+            return;
+        }
+
+        const subscribers = await this.telegramSubscriptionsService.getSubscriptions(address);
+        await Promise.all(subscribers.map(subscriber => {
+            return this.sendMessage(subscriber.telegramChatId, `Payout sent: ${amountSats} sats (txid: ${txid})`);
+        }));
+    }
+
     private async pollUpdates() {
         try {
             const response = await this.bot.get('getUpdates', {

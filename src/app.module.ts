@@ -20,19 +20,20 @@ import { BitcoinRpcService } from './services/bitcoin-rpc.service';
 import { LogRotationService } from './services/log-rotation.service';
 import { BraiinsService } from './services/braiins.service';
 import { BTCPayService } from './services/btc-pay.service';
-import { DiscordService } from './services/discord.service';
-import { NotificationService } from './services/notification.service';
+import { NotificationModule } from './services/notification.module';
 import { StratumV1JobsService } from './services/stratum-v1-jobs.service';
 import { StratumV1Service } from './services/stratum-v1.service';
-import { TelegramService } from './services/telegram.service';
 import { ExternalSharesService } from './services/external-shares.service';
 import { ExternalShareController } from './controllers/external-share/external-share.controller';
 import { ExternalSharesModule } from './ORM/external-shares/external-shares.module';
 import { PplnsSharesModule } from './ORM/pplns-shares/pplns-shares.module';
 import { PayoutLedgerModule } from './ORM/payout-ledger/payout-ledger.module';
 import { PoolAccountingModule } from './ORM/pool-accounting/pool-accounting.module';
+import { MinerAccountSettingsModule } from './ORM/miner-account-settings/miner-account-settings.module';
 import { PplnsModule } from './pplns/pplns.module';
 import { PplnsController } from './controllers/pplns/pplns.controller';
+import { AuthModule } from './auth/auth.module';
+import { MinerAccountController } from './controllers/miner-account/miner-account.controller';
 
 const ORMModules = [
     ClientStatisticsModule,
@@ -44,7 +45,8 @@ const ORMModules = [
     ExternalSharesModule,
     PplnsSharesModule,
     PayoutLedgerModule,
-    PoolAccountingModule
+    PoolAccountingModule,
+    MinerAccountSettingsModule
 ]
 
 @Module({
@@ -67,6 +69,8 @@ const ORMModules = [
         CacheModule.register(),
         ScheduleModule.forRoot(),
         HttpModule,
+        NotificationModule,
+        AuthModule,
         PplnsModule,
         ...ORMModules
     ],
@@ -75,15 +79,13 @@ const ORMModules = [
         ClientController,
         AddressController,
         ExternalShareController,
-        PplnsController
+        PplnsController,
+        MinerAccountController
     ],
     providers: [
-        DiscordService,
         AppService,
         StratumV1Service,
-        TelegramService,
         BitcoinRpcService,
-        NotificationService,
         BitcoinAddressValidator,
         StratumV1JobsService,
         BTCPayService,

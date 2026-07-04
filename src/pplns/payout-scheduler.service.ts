@@ -2,6 +2,8 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { PayoutLedgerService } from '../ORM/payout-ledger/payout-ledger.service';
+import { MinerAccountSettingsService } from '../ORM/miner-account-settings/miner-account-settings.service';
+import { NotificationService } from '../services/notification.service';
 import { WalletRpcService } from '../services/wallet-rpc.service';
 
 const DEFAULT_MIN_PAYOUT_THRESHOLD_SATS = 100000;
@@ -25,6 +27,8 @@ export class PayoutSchedulerService implements OnModuleInit {
         private readonly payoutLedger: PayoutLedgerService,
         private readonly walletRpc: WalletRpcService,
         private readonly configService: ConfigService,
+        private readonly minerAccountSettings: MinerAccountSettingsService,
+        private readonly notificationService: NotificationService,
     ) {
     }
 
@@ -43,8 +47,17 @@ export class PayoutSchedulerService implements OnModuleInit {
     }
 
     public async runPayoutCycle(): Promise<void> {
-        const thresholdSats = this.getMinPayoutThresholdSats();
-        const candidates = await this.payoutLedger.getPendingTotalsAboveThreshold(thresholdSats);
+        const poolThresholdSats = this.getMinPayoutThresholdSats();
+        const allPending = await this.payoutLedger.getAllPendingTotals();
+        if (allPending.length === 0) {
+            return;
+        }
+
+        // Concept doc §11: a miner's own payoutThresholdSatsOverride wins over
+        // the pool-wide default when set (e.g. someone who wants to be paid
+        // out sooner/later than everyone else).
+        const overrides = await this.minerAccountSettings.getOverridesByAddress(allPending.map(c => c.minerAddress));
+        const candidates = allPending.filter(c => c.totalPendingSats >= (overrides.get(c.minerAddress) ?? poolThresholdSats));
         if (candidates.length === 0) {
             return;
         }
@@ -95,6 +108,12 @@ export class PayoutSchedulerService implements OnModuleInit {
         }
 
         console.log(`PPLNS payout batch sent: txid=${txid}, miners=${candidates.length}, totalSats=${candidates.reduce((sum, c) => sum + c.totalPendingSats, 0)}`);
+
+        const notifyAddresses = await this.minerAccountSettings.getNotifyOnPayoutAddresses(candidates.map(c => c.minerAddress));
+        await Promise.all(candidates
+            .filter(c => notifyAddresses.has(c.minerAddress))
+            .map(c => this.notificationService.notifyPayoutSent(c.minerAddress, c.totalPendingSats, txid)
+                .catch(e => console.warn(`Payout notification failed for ${c.minerAddress}: ${e?.message ?? e}`))));
     }
 
     public async reconcileSentPayouts(): Promise<void> {
