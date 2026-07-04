@@ -29,6 +29,8 @@ import { SuggestDifficulty } from './stratum-messages/SuggestDifficultyMessage';
 import { StratumV1ClientStatistics } from './StratumV1ClientStatistics';
 import { ExternalSharesService } from '../services/external-shares.service';
 import { elektronMainnet, elektronRegtest } from '../utils/elektron-network';
+import { PplnsShareLogService } from '../ORM/pplns-shares/pplns-shares.service';
+import { RewardCalculatorService } from '../pplns/reward-calculator.service';
 
 const TRUE_DIFF_ONE = 2.695953529101131e67;
 const BLOCKED_USER_AGENT_LOG_INTERVAL_MS = 60 * 1000;
@@ -75,7 +77,9 @@ export class StratumV1Client {
         private readonly blocksService: BlocksService,
         private readonly configService: ConfigService,
         private readonly addressSettingsService: AddressSettingsService,
-        private readonly externalSharesService: ExternalSharesService
+        private readonly externalSharesService: ExternalSharesService,
+        private readonly pplnsShareLogService: PplnsShareLogService,
+        private readonly rewardCalculatorService: RewardCalculatorService
     ) {
 
         this.socket.on('data', (data: Buffer) => {
@@ -474,26 +478,42 @@ export class StratumV1Client {
         if (!this.clientAuthorization?.address) {
             return;
         }
-        const jobTemplate = await this.stratumV1JobsService.buildTemplateFor(this.clientAuthorization.address);
+        const jobTemplate = await this.stratumV1JobsService.buildTemplateFor(this.getPoolWalletAddress());
         if (jobTemplate.blockData.clearJobs) {
             this.miningSubmissionHashes.clear();
         }
         await this.sendNewMiningJob(jobTemplate);
     }
 
+    private getPoolWalletAddress(): string {
+        // PPLNS: every miner's coinbase pays the shared pool wallet, not the
+        // miner directly. The reward is later split among all miners who
+        // contributed shares in the PPLNS window (see RewardCalculatorService).
+        // This also means all miners share the identical coinbase, which is
+        // what makes a future shared-template optimization possible (concept
+        // doc §3.2b) even though this version still fetches one template per
+        // connected miner.
+        const address = this.configService.get<string>('POOL_WALLET_ADDRESS');
+        if (!address) {
+            throw new Error('POOL_WALLET_ADDRESS is not configured');
+        }
+        return address;
+    }
+
     private async sendNewMiningJob(jobTemplate: IJobTemplate) {
 
         // Elektron Net: the UTXO attestation hash committed to in the template's
-        // coinbase is computed against a single payout output to the miner's
-        // address. Multiple outputs (e.g. a dev-fee split) would change the
-        // coinbase and break the attestation, so the pool pays the full reward
-        // directly to the miner's authorized address. No pool fee, no dev fee.
+        // coinbase is computed against a single payout output. Multiple outputs
+        // (e.g. an on-chain dev-fee split) would change the coinbase and break
+        // the attestation, so the pool fee (if any) is deducted purely by
+        // accounting during PPLNS payout (see RewardCalculatorService), never
+        // as a second coinbase output.
         this.noFee = true;
         if (this.entity) {
             this.hashRate = this.statistics.hashRate;
         }
         const payoutInformation = [
-            { address: this.clientAuthorization.address, percent: 100 }
+            { address: this.getPoolWalletAddress(), percent: 100 }
         ];
 
         const networkConfig = this.configService.get('NETWORK');
@@ -751,6 +771,16 @@ export class StratumV1Client {
 
                     await this.notificationService.notifySubscribersBlockFound(this.clientAuthorization.address, jobTemplate.blockData.height, updatedJobBlock, result);
                     await this.addressSettingsService.resetBestDifficultyAndShares();
+
+                    try {
+                        // PPLNS: split the actual coinbase value (subsidy + fees) among
+                        // everyone who contributed shares in the PPLNS window, minus the
+                        // pool fee. minerAddress above is who found it (for statistics
+                        // only) — the reward itself is shared, not sent to this miner alone.
+                        await this.rewardCalculatorService.processBlockFound(jobTemplate.blockData.height, jobTemplate.blockData.coinbasevalue);
+                    } catch (e) {
+                        console.error(`PPLNS reward calculation failed for block ${jobTemplate.blockData.height}: ${e?.message ?? e}`);
+                    }
                 }
             }
             await this.ensureClientEntity();
@@ -761,6 +791,10 @@ export class StratumV1Client {
                 // diff. See StratumV1ClientStatistics.addShares for the full
                 // rationale.
                 await this.statistics.addShares(this.entity, submissionDifficulty);
+                // PPLNS share log: independent, fine-grained record used for the
+                // reward split above (see concept doc §5.1 — the 10-minute buckets
+                // in StratumV1ClientStatistics are too coarse for a 60s block time).
+                await this.pplnsShareLogService.record(this.clientAuthorization.address, submissionDifficulty, jobTemplate.blockData.height);
                 const now = new Date();
                 // only update every minute
                 if (this.entity.updatedAt == null || now.getTime() - this.entity.updatedAt.getTime() > 1000 * 60) {
@@ -841,7 +875,7 @@ export class StratumV1Client {
 
             await this.socket.write(data);
 
-            const jobTemplate = await this.stratumV1JobsService.buildTemplateFor(this.clientAuthorization.address);
+            const jobTemplate = await this.stratumV1JobsService.buildTemplateFor(this.getPoolWalletAddress());
             const nextTimestamp = Math.max(
                 jobTemplate.block.timestamp,
                 Math.floor(Date.now() / 1000),

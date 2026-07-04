@@ -1,7 +1,7 @@
 {
-  "name": "elektron-net-pool",
+  "name": "elektron-net-ppool",
   "version": "4.0.3",
-  "description": "",
+  "description": "Elektron Net PPLNS (shared) mining pool",
   "author": "",
   "private": true,
   "license": "UNLICENSED",

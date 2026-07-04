@@ -28,6 +28,11 @@ import { TelegramService } from './services/telegram.service';
 import { ExternalSharesService } from './services/external-shares.service';
 import { ExternalShareController } from './controllers/external-share/external-share.controller';
 import { ExternalSharesModule } from './ORM/external-shares/external-shares.module';
+import { PplnsSharesModule } from './ORM/pplns-shares/pplns-shares.module';
+import { PayoutLedgerModule } from './ORM/payout-ledger/payout-ledger.module';
+import { PoolAccountingModule } from './ORM/pool-accounting/pool-accounting.module';
+import { PplnsModule } from './pplns/pplns.module';
+import { PplnsController } from './controllers/pplns/pplns.controller';
 
 const ORMModules = [
     ClientStatisticsModule,
@@ -36,7 +41,10 @@ const ORMModules = [
     TelegramSubscriptionsModule,
     BlocksModule,
     RpcBlocksModule,
-    ExternalSharesModule
+    ExternalSharesModule,
+    PplnsSharesModule,
+    PayoutLedgerModule,
+    PoolAccountingModule
 ]
 
 @Module({
@@ -55,13 +63,15 @@ const ORMModules = [
         CacheModule.register(),
         ScheduleModule.forRoot(),
         HttpModule,
+        PplnsModule,
         ...ORMModules
     ],
     controllers: [
         AppController,
         ClientController,
         AddressController,
-        ExternalShareController
+        ExternalShareController,
+        PplnsController
     ],
     providers: [
         DiscordService,

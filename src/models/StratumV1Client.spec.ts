@@ -50,6 +50,8 @@ describe('StratumV1Client', () => {
     let notificationService: NotificationService;
     let blocksService: BlocksService;
     let externalSharesService;
+    let pplnsShareLogService;
+    let rewardCalculatorService;
     let configService: ConfigService;
 
     let client: StratumV1Client;
@@ -90,6 +92,8 @@ describe('StratumV1Client', () => {
                             switch (key) {
                                 case 'DEV_FEE_ADDRESS':
                                     return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
+                                case 'POOL_WALLET_ADDRESS':
+                                    return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
                                 case 'NETWORK':
                                     return 'bitcoin-testnet';
                             }
@@ -129,6 +133,8 @@ describe('StratumV1Client', () => {
             switch (key) {
                 case 'DEV_FEE_ADDRESS':
                     return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
+                case 'POOL_WALLET_ADDRESS':
+                    return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
                 case 'NETWORK':
                     return 'bitcoin-testnet';
             }
@@ -167,6 +173,12 @@ describe('StratumV1Client', () => {
         externalSharesService = {
             submitShare: jest.fn().mockResolvedValue(undefined)
         };
+        pplnsShareLogService = {
+            record: jest.fn().mockResolvedValue(undefined)
+        };
+        rewardCalculatorService = {
+            processBlockFound: jest.fn().mockResolvedValue(undefined)
+        };
 
 
         client = new StratumV1Client(
@@ -179,7 +191,9 @@ describe('StratumV1Client', () => {
             blocksService,
             configService,
             addressSettings,
-            externalSharesService
+            externalSharesService,
+            pplnsShareLogService,
+            rewardCalculatorService
         );
 
         client.extraNonceAndSessionId = MockRecording1.EXTRA_NONCE;
@@ -232,6 +246,8 @@ describe('StratumV1Client', () => {
                     return 'NMMiner';
                 case 'DEV_FEE_ADDRESS':
                     return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
+                case 'POOL_WALLET_ADDRESS':
+                    return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
                 case 'NETWORK':
                     return 'bitcoin-testnet';
             }
@@ -254,6 +270,8 @@ describe('StratumV1Client', () => {
                 case 'NON_COMPLIANT_USER_AGENTS':
                     return 'NMMiner';
                 case 'DEV_FEE_ADDRESS':
+                    return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
+                case 'POOL_WALLET_ADDRESS':
                     return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
                 case 'NETWORK':
                     return 'bitcoin-testnet';
@@ -282,7 +300,9 @@ describe('StratumV1Client', () => {
             blocksService,
             configService,
             moduleRef.get<AddressSettingsService>(AddressSettingsService),
-            externalSharesService
+            externalSharesService,
+            pplnsShareLogService,
+            rewardCalculatorService
         );
 
         socketEmitter(Buffer.from(`{"id":1,"method":"mining.subscribe","params":["NMMiner/1.0"]}\n`));
@@ -564,7 +584,9 @@ describe('StratumV1Client', () => {
             blocksService,
             configService,
             moduleRef.get<AddressSettingsService>(AddressSettingsService),
-            externalSharesService
+            externalSharesService,
+            pplnsShareLogService,
+            rewardCalculatorService
         );
         jest.spyOn(secondClient as any, 'write').mockImplementation((data) => Promise.resolve(true));
         jest.spyOn(secondClient as any, 'getRandomHexString').mockReturnValue(MockRecording1.EXTRA_NONCE);
