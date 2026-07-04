@@ -184,7 +184,7 @@ curl -X POST http://<pool-host>:3334/api/auth/challenge \
 Response:
 
 ```json
-{"message":"Sign this message to log in to the Elektron Net PPLNS pool.\n\nAddress: bc1q...\nNonce: 8c4fa33cea8e69650fa6b50d70ee75be\n\nThis request will not move any funds."}
+{"message":"Sign this message to log in to the Elektron Net PPLNS Pool.\n\nAddress: bc1q...\nNonce: 8c4fa33cea8e69650fa6b50d70ee75be\n\nThis request will not move any funds."}
 ```
 
 The `message` string is what needs to be signed — verbatim, including the
@@ -248,9 +248,11 @@ curl -X PATCH http://<pool-host>:3334/api/miner/<address>/account-settings \
 ```
 
 - `payoutThresholdSatsOverride` — pay this miner out once *their own*
-  balance reaches this many sats, instead of waiting for the pool-wide
-  `MIN_PAYOUT_THRESHOLD_SATS`. Send `null` to clear the override and go back
-  to the pool default. Omit the field entirely to leave it unchanged.
+  balance reaches this many lep (the field name is kept as-is for API
+  stability, but the unit is lep, not satoshis), instead of waiting for the
+  pool-wide `MIN_PAYOUT_THRESHOLD_SATS`. Send `null` to clear the override
+  and go back to the pool default. Omit the field entirely to leave it
+  unchanged.
 - `notifyOnPayout` — if `true`, sends a Telegram message on every payout that
   includes this miner. Requires first linking a chat by messaging the pool's
   Telegram bot with `/subscribe <address>` (see `TELEGRAM_BOT_TOKEN` above) —

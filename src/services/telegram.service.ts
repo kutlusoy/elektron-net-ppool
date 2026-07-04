@@ -65,7 +65,7 @@ export class TelegramService implements OnModuleInit {
 
         const subscribers = await this.telegramSubscriptionsService.getSubscriptions(address);
         await Promise.all(subscribers.map(subscriber => {
-            return this.sendMessage(subscriber.telegramChatId, `Payout sent: ${amountSats} sats (txid: ${txid})`);
+            return this.sendMessage(subscriber.telegramChatId, `Payout sent: ${amountSats} lep (txid: ${txid})`);
         }));
     }
 
@@ -104,7 +104,7 @@ export class TelegramService implements OnModuleInit {
         }
 
         if (msg.text.startsWith('/start')) {
-            await this.sendMessage(msg.chat.id, 'Welcome to the public-pool bot. /subscribe <address> to get notified.');
+            await this.sendMessage(msg.chat.id, 'Welcome to the Elektron Net PPLNS Pool bot. /subscribe <address> to get notified.');
             return;
         }
 

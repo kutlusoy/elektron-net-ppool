@@ -842,7 +842,7 @@ export class StratumV1Client {
                     address: this.clientAuthorization.address,
                     userAgent: this.clientSubscription.userAgent,
                     header: header.toString('hex'),
-                    externalPoolName: this.configService.get('POOL_IDENTIFIER') || 'Public-Pool'
+                    externalPoolName: this.configService.get('POOL_IDENTIFIER') || 'Elektron-PPLNS-Pool'
                 });
             }
 

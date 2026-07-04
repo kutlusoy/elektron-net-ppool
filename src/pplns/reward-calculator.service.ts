@@ -62,7 +62,7 @@ export class RewardCalculatorService {
         const dustSats = distributable - allocatedSats;
         await this.poolAccounting.addFeeAndDust(feeSats, dustSats);
 
-        console.log(`PPLNS: block ${blockHeight} reward ${blockRewardSats} sats split among ${perMinerTotals.size} miners (fee=${feeSats}, dust=${dustSats})`);
+        console.log(`PPLNS: block ${blockHeight} reward ${blockRewardSats} lep split among ${perMinerTotals.size} miners (fee=${feeSats}, dust=${dustSats})`);
     }
 
     private getFeePercent(): number {

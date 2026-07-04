@@ -73,9 +73,9 @@ export class WalletRpcService implements OnModuleInit {
         });
     }
 
-    // sendmany-equivalent batch payout. Amounts are in satoshis; the RPC wants
-    // BTC-denominated decimal strings, hence the fixed(8) conversion (avoids
-    // floating point artifacts like 0.1+0.2).
+    // sendmany-equivalent batch payout. Amounts are in lepton (Elektron's
+    // smallest unit); the RPC wants ELEK-denominated decimal strings, hence
+    // the fixed(8) conversion (avoids floating point artifacts like 0.1+0.2).
     //
     // If WALLET_PASSPHRASE is configured (encrypted wallet), the wallet is
     // unlocked just long enough for this one call and explicitly re-locked

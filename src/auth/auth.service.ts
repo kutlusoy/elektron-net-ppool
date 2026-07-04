@@ -59,7 +59,7 @@ export class AuthService {
     }
 
     private buildMessage(address: string, nonce: string): string {
-        return `Sign this message to log in to the Elektron Net PPLNS pool.\n\nAddress: ${address}\nNonce: ${nonce}\n\nThis request will not move any funds.`;
+        return `Sign this message to log in to the Elektron Net PPLNS Pool.\n\nAddress: ${address}\nNonce: ${nonce}\n\nThis request will not move any funds.`;
     }
 
     private getJwtSecret(): string {

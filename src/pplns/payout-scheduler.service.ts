@@ -10,7 +10,7 @@ const DEFAULT_MIN_PAYOUT_THRESHOLD_SATS = 100000;
 const DEFAULT_PAYOUT_INTERVAL_MINUTES = 60;
 const DEFAULT_CONFIRMATIONS_REQUIRED = 1;
 // §9.3.2: alert rather than auto-correct on a pool-DB vs wallet mismatch.
-// Allow a small tolerance for sats already earmarked as fee/dust that never
+// Allow a small tolerance for lep already earmarked as fee/dust that never
 // hit the ledger as a miner credit.
 const RECONCILIATION_TOLERANCE_SATS = 100000;
 
@@ -79,7 +79,7 @@ export class PayoutSchedulerService implements OnModuleInit {
         const spendableSats = await this.walletRpc.getWalletBalanceSats();
         if (spendableSats < totalRequestedSats) {
             console.log(
-                `PPLNS payout deferred: ${totalRequestedSats} sats owed but only ${spendableSats} sats spendable `
+                `PPLNS payout deferred: ${totalRequestedSats} lep owed but only ${spendableSats} lep spendable `
                 + `(the rest is likely still immature coinbase — will retry once it matures).`,
             );
             return;
@@ -107,7 +107,7 @@ export class PayoutSchedulerService implements OnModuleInit {
             await this.payoutLedger.markSentUpTo(candidate.minerAddress, candidate.maxRowId, txid);
         }
 
-        console.log(`PPLNS payout batch sent: txid=${txid}, miners=${candidates.length}, totalSats=${candidates.reduce((sum, c) => sum + c.totalPendingSats, 0)}`);
+        console.log(`PPLNS payout batch sent: txid=${txid}, miners=${candidates.length}, totalLep=${candidates.reduce((sum, c) => sum + c.totalPendingSats, 0)}`);
 
         const notifyAddresses = await this.minerAccountSettings.getNotifyOnPayoutAddresses(candidates.map(c => c.minerAddress));
         await Promise.all(candidates
@@ -140,8 +140,8 @@ export class PayoutSchedulerService implements OnModuleInit {
 
             if (walletBalanceSats + RECONCILIATION_TOLERANCE_SATS < totalPendingSats) {
                 console.error(
-                    `PPLNS RECONCILIATION MISMATCH: pool wallet balance (${walletBalanceSats} sats) is below `
-                    + `total miner balances owed (${totalPendingSats} sats). Manual investigation required — `
+                    `PPLNS RECONCILIATION MISMATCH: pool wallet balance (${walletBalanceSats} lep) is below `
+                    + `total miner balances owed (${totalPendingSats} lep). Manual investigation required — `
                     + `this alert does not auto-correct anything.`,
                 );
             }
