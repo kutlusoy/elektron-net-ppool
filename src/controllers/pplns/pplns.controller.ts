@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Header, Param } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { PayoutLedgerService } from '../../ORM/payout-ledger/payout-ledger.service';
@@ -7,6 +7,9 @@ import { PplnsShareLogService } from '../../ORM/pplns-shares/pplns-shares.servic
 const DEFAULT_MIN_PAYOUT_THRESHOLD_SATS = 100000;
 const DEFAULT_PAYOUT_INTERVAL_MINUTES = 60;
 const DEFAULT_FEE_PERCENT = 0;
+// Same data as /payout-history, just uncapped -- a miner exporting for their
+// own records/taxes wants the full history, not the dashboard's 100-row page.
+const CSV_EXPORT_ROW_LIMIT = 100000;
 
 // Concept doc §10.3: thin read-only wrappers over the PPLNS services, for the
 // elektron-net-ppool-ui dashboard.
@@ -41,6 +44,22 @@ export class PplnsController {
             status: row.status,
             timestamp: row.updatedAt,
         }));
+    }
+
+    @Get('miner/:address/payout-history/csv')
+    @Header('Content-Type', 'text/csv')
+    @Header('Content-Disposition', 'attachment; filename="payout-history.csv"')
+    async getPayoutHistoryCsv(@Param('address') address: string): Promise<string> {
+        const rows = await this.payoutLedgerService.getPayoutHistory(address, CSV_EXPORT_ROW_LIMIT);
+        const header = 'blockHeight,amountSats,txid,status,timestamp';
+        const lines = rows.map(row => [
+            row.blockHeight,
+            row.amountSats,
+            row.txid ?? '',
+            row.status,
+            row.updatedAt?.toISOString() ?? '',
+        ].join(','));
+        return [header, ...lines].join('\n') + '\n';
     }
 
     @Get('pool/pplns-window-stats')

@@ -55,7 +55,10 @@ export class PayoutLedgerService {
     // a stable cutoff so a batch payout only claims the rows that existed when
     // the cycle started — shares credited while the sendmany call is in flight
     // remain PENDING for the next cycle instead of being silently included.
-    public async getPendingTotalsAboveThreshold(thresholdSats: number): Promise<IPendingPayoutCandidate[]> {
+    // Deliberately not threshold-filtered here: each miner may have their own
+    // payout threshold override (concept doc §11), so PayoutSchedulerService
+    // applies the effective per-miner threshold itself after fetching this.
+    public async getAllPendingTotals(): Promise<IPendingPayoutCandidate[]> {
         const rows = await this.payoutLedgerRepository
             .createQueryBuilder('ledger')
             .select('ledger.minerAddress', 'minerAddress')
@@ -63,7 +66,6 @@ export class PayoutLedgerService {
             .addSelect('MAX(ledger.id)', 'maxRowId')
             .where('ledger.status = :status', { status: ePayoutStatus.PENDING })
             .groupBy('ledger.minerAddress')
-            .having('SUM(ledger.amountSats) >= :thresholdSats', { thresholdSats })
             .getRawMany();
 
         return rows.map(row => ({
