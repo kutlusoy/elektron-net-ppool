@@ -1,0 +1,81 @@
+import { Expose, Transform } from 'class-transformer';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsString, Length } from 'class-validator';
+
+import { eRequestMethod } from '../enums/eRequestMethod';
+import { EXTRANONCE2_SIZE_BYTES } from '../stratum.constants';
+import { StratumBaseMessage } from './StratumBaseMessage';
+import * as bitcoinjs from 'bitcoinjs-lib';
+
+
+export class MiningSubmitMessage extends StratumBaseMessage {
+
+    @IsArray()
+    @ArrayMinSize(5)
+    @ArrayMaxSize(6)
+    public params: string[];
+
+    @Expose()
+    @IsString()
+    @Transform(({ value, key, obj, type }) => {
+        return obj.params[0];
+    })
+    public userId: string;
+    @Expose()
+    @IsString()
+    @Transform(({ value, key, obj, type }) => {
+        return obj.params[1];
+    })
+    public jobId: string;
+    @Expose()
+    @IsString()
+    @Transform(({ value, key, obj, type }) => {
+        // Pass through whatever the firmware sent in params[2]. With
+        // EXTRANONCE2_SIZE_BYTES = 0 the pool advertised "no extranonce2"
+        // and the field has no role in coinbase construction on our side,
+        // but some firmwares (NerdMiner_v2 utils.cpp:222-226) still inject
+        // a 4-byte placeholder regardless. Capturing the actual value here
+        // makes diagnostics (see DIAGNOSTIC_SHARE_LOGGING_MODES) meaningful
+        // and costs nothing — the pool does not feed extraNonce2 into the
+        // canonical coinbase the way miner.py does not either.
+        return obj.params[2] ?? '';
+    })
+    public extraNonce2: string;
+    @Expose()
+    @IsString()
+    @Transform(({ value, key, obj, type }) => {
+        return obj.params[3];
+    })
+    public ntime: string;
+    @Expose()
+    @IsString()
+    @Transform(({ value, key, obj, type }) => {
+        return obj.params[4];
+    })
+    public nonce: string
+
+    @Expose()
+    @IsString()
+    @Transform(({ value, key, obj, type }) => {
+        return obj.params[5] == null ? '0' : obj.params[5];
+    })
+    public versionMask?: string | null;
+
+    constructor() {
+        super();
+        this.method = eRequestMethod.AUTHORIZE;
+    }
+
+
+    public response() {
+        return {
+            id: this.id,
+            error: null,
+            result: true
+        };
+    }
+
+    public hash(): string{
+        const buffer = Buffer.from(this.versionMask + this.nonce + this.extraNonce2 + this.ntime + this.jobId);
+        return bitcoinjs.crypto.hash256(buffer).toString('base64');
+    }
+}
