@@ -26,6 +26,8 @@ describe('StratumV1Service', () => {
             {} as any,
             {} as any,
             {} as any,
+            {} as any,
+            {} as any,
             {} as any
         );
         consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);

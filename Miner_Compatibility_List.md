@@ -2,6 +2,11 @@
 
 Status of known SHA-256d miners against the Elektron Net pool.
 
+> This list applies identically to both `elektron-net-pool` (solo) and this
+> PPLNS pool — miner protocol compatibility is independent of the payout
+> scheme. See `README.md` for how PPLNS reward distribution differs from
+> solo payouts.
+
 ## TL;DR
 
 The pool runs **header-only Stratum v1** (`extranonce1 = "" or session tag, extranonce2_size = 0`) because Elektron's

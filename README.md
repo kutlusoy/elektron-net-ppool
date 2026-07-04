@@ -5,7 +5,36 @@ A NestJS and TypeScript Stratum V1 mining pool server for **Elektron Net**
 and 60 s block time — see `doc-elektron/BITCOIN_CORE_DIFF.md` and
 `doc-elektron/mining-pool-integration.md` in the elektron-net repo).
 
-This fork derives from `public-pool`. The Elektron-specific changes are:
+This is the **PPLNS (Pay Per Last N Shares) shared-mining pool**. It is a
+sibling of [`elektron-net-pool`](https://github.com/kutlusoy/elektron-net-pool)
+(the solo pool, unmodified, still 100% payout to whoever finds the block) and
+shares its entire attestation-compatible codebase. The only functional
+difference from the solo pool is *who* the coinbase pays and how that reward
+is subsequently split:
+
+- Every connected miner's coinbase pays the pool's own `POOL_WALLET_ADDRESS`,
+  not the miner's address (see `src/models/StratumV1Client.ts`,
+  `getPoolWalletAddress()`).
+- Every valid share is logged in a dedicated PPLNS ledger
+  (`PplnsShareLogService`) independent of the existing hashrate/vardiff
+  statistics.
+- When a block is found, `RewardCalculatorService` splits the actual
+  coinbase value (subsidy + fees) proportionally among everyone who
+  submitted shares within the last `PPLNS_WINDOW_MINUTES`, minus
+  `POOL_FEE_PERCENT`, and credits each miner's balance in
+  `PayoutLedgerService`.
+- `PayoutSchedulerService` batches up miner balances above
+  `MIN_PAYOUT_THRESHOLD_SATS` into a periodic `sendmany`-style payout
+  transaction, and reconciles sent transactions against confirmations and
+  the pool wallet's on-chain balance.
+- The UI is served by the sibling
+  [`elektron-net-ppool-ui`](https://github.com/kutlusoy/elektron-net-ppool-ui)
+  repo, itself a fork of `elektron-net-pool-ui` with PPLNS-specific views
+  added (pending balance, payout history, PPLNS window stats, fee
+  disclosure).
+
+The upstream Elektron-specific attestation handling (shared with the solo
+pool) is unchanged:
 
 - Reads `coinbase_required_outputs` from `getblocktemplate` and appends them
   verbatim to the coinbase (UTXO attestation + witness commitment, in that
@@ -17,17 +46,24 @@ This fork derives from `public-pool`. The Elektron-specific changes are:
 - **Per-miner block templates.** The Elektron node computes the UTXO
   attestation hash against the template's coinbase, including the payout
   output. The pool therefore calls `getblocktemplate` separately for each
-  connected miner, passing the miner's payout address in the
-  `coinbaseaddress` parameter. Templates cannot be shared across miners as
-  in plain Bitcoin pools — a mismatch would be rejected as
-  `bad-utxo-attestation`. Each client refreshes its template on every new
-  block plus a 30 s safety timer.
-- **No dev/pool fee in the coinbase.** A second coinbase output would
-  change the bytes the attestation hash was computed against, so 100 % of
-  the block reward goes directly to the miner's authorized payout address.
+  connected miner, passing `POOL_WALLET_ADDRESS` in the `coinbaseaddress`
+  parameter (all miners get the identical template, since they all pay the
+  same address — see "Follow-up optimizations" below). Each client refreshes
+  its template on every new block plus a 30 s safety timer.
+- **No on-chain fee split in the coinbase.** A second coinbase output would
+  change the bytes the attestation hash was computed against, so the pool
+  fee is deducted purely by accounting during the PPLNS payout — never as
+  an additional coinbase output.
 
 Requires an **Elektron Net node v4.0+** (protocol version 70017) as the RPC
 backend.
+
+### Follow-up optimizations (not yet implemented)
+
+Since all miners share the same `POOL_WALLET_ADDRESS`, their coinbase is
+byte-identical. A future optimization could fetch one shared
+`getblocktemplate` for all connected workers instead of one call per miner,
+substantially reducing RPC load on the node. Not required for this version.
 
 ## Installation
 
@@ -61,9 +97,44 @@ $ npm run test
 $ npm run test:cov
 ```
 
+## PPLNS configuration
+
+See `.env.example` for the full list of PPLNS-specific variables
+(`POOL_WALLET_ADDRESS`, `PPLNS_WINDOW_MINUTES`, `POOL_FEE_PERCENT`,
+`MIN_PAYOUT_THRESHOLD_SATS`, `PAYOUT_INTERVAL_MINUTES`,
+`PAYOUT_CONFIRMATIONS_REQUIRED`, `PAYOUT_DRY_RUN`, `WALLET_RPC_*`).
+`POOL_WALLET_ADDRESS` is required — the pool refuses to build mining jobs
+without it.
+
+`WALLET_RPC_*` defaults to the same connection as `ELEKTRON_RPC_*` (single
+server, fine for testnet/development). For mainnet operation, point it at a
+separate, network-isolated wallet server instead — see the concept doc §9
+for the recommended topology (VPN-tunnelled wallet RPC, pruned pool node,
+unpruned wallet node). This is a configuration change only, no code change
+needed.
+
+Before your first live payout, run with `PAYOUT_DRY_RUN=true` and confirm
+the logged payout batches look correct — the scheduler will log what it
+would pay without calling `sendmany` or touching the payout ledger.
+
+### New read-only API endpoints
+
+In addition to the existing `elektron-net-pool` endpoints, this pool exposes:
+
+```
+GET /api/miner/:address/pending-balance
+GET /api/miner/:address/payout-history
+GET /api/pool/pplns-window-stats
+GET /api/pool/fee-info
+```
+
+These back the PPLNS-specific views in `elektron-net-ppool-ui`.
+
 ## Web interface
 
-See [elektron-net-pool-ui](https://github.com/kutlusoy/elektron-net-pool-ui).
+See [elektron-net-ppool-ui](https://github.com/kutlusoy/elektron-net-ppool-ui)
+(a fork of [elektron-net-pool-ui](https://github.com/kutlusoy/elektron-net-pool-ui)
+with PPLNS-specific views added).
 
 ## Supported miners
 
@@ -162,5 +233,22 @@ testing against an upstream Bitcoin Core node, set `NETWORK=bitcoin-mainnet`,
 
 `DEV_FEE_ADDRESS` from upstream `public-pool` is ignored: Elektron's per-block
 UTXO attestation pins the coinbase to a single payout output, so the pool
-cannot insert a fee split. Operators who want to charge fees must collect
-them off-chain (e.g. periodic transfers from miner addresses).
+cannot insert a fee split. This is also why the pool fee here
+(`POOL_FEE_PERCENT`) is deducted by accounting during the PPLNS payout
+instead of as a second coinbase output.
+
+## Verification before going live
+
+Attestation compatibility is inherited unchanged from the solo pool and is
+already battle-tested, but the PPLNS reward/payout path is new. Before the
+first mainnet block:
+
+1. Run against a testnet/regtest Elektron node and submit a test block —
+   confirm the node accepts it (no `bad-utxo-attestation`).
+2. Feed the PPLNS share log synthetic data with known difficulty values and
+   manually verify `RewardCalculatorService`'s split.
+3. Run `PayoutSchedulerService` with `PAYOUT_DRY_RUN=true` first and
+   manually verify the logged amounts before enabling real `sendmany` calls.
+4. Confirm the wallet-balance reconciliation check
+   (`PayoutSchedulerService.checkPoolWalletReconciliation`) logs cleanly
+   with no mismatch warnings under normal operation.
