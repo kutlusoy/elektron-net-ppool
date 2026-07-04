@@ -321,6 +321,14 @@ accepts when the event loop or RSS goes red.
 
 ## Docker
 
+**Want the web UI too, running alongside this backend with one command?**
+See [elektron-net-ppool-ui](https://github.com/kutlusoy/elektron-net-ppool-ui)'s
+README → "Docker → Option A: complete package" — its `docker-compose.yml`
+builds and runs both this backend and the UI together on one Docker network,
+with the UI reverse-proxying API calls to this container automatically (no
+manual host/IP lookup, no CORS setup). The rest of this section covers
+running the backend on its own.
+
 ### 0. Installing Docker itself
 
 Skip to [step 1](#1-clone-the-repo-and-create-your-env) if Docker is already
