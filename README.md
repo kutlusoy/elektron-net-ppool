@@ -148,11 +148,126 @@ In addition to the existing `elektron-net-pool` endpoints, this pool exposes:
 ```
 GET /api/miner/:address/pending-balance
 GET /api/miner/:address/payout-history
+GET /api/miner/:address/payout-history/csv
 GET /api/pool/pplns-window-stats
 GET /api/pool/fee-info
 ```
 
-These back the PPLNS-specific views in `elektron-net-ppool-ui`.
+These back the PPLNS-specific views in `elektron-net-ppool-ui`. All of them are
+public — anyone who knows a payout address can look up its balance and
+history, same as looking up a Bitcoin address on a block explorer. No login
+is required for these.
+
+## Miner account API — login and settings
+
+Set `JWT_SECRET` in `.env` (a random 32+ character value, e.g. `openssl rand
+-hex 32`) to enable this. It signs the login tokens below; treat it like any
+other secret — never commit it, and rotating it invalidates every miner's
+current session.
+
+This section is for anyone building a client against the pool's account
+API directly (a custom dashboard, a script, a wallet integration) rather
+than using `elektron-net-ppool-ui`. There's no username/password anywhere —
+a miner proves they control a payout address by signing a one-time message
+with the same wallet that address belongs to, the same mechanism behind
+Bitcoin Core's `signmessage`/`verifymessage` RPCs and supported by most
+wallets (Electrum, Sparrow, many hardware wallets).
+
+### 1. Request a login challenge
+
+```bash
+curl -X POST http://<pool-host>:3334/api/auth/challenge \
+  -H 'Content-Type: application/json' \
+  -d '{"address":"bc1qexampleaddress..."}'
+```
+
+Response:
+
+```json
+{"message":"Sign this message to log in to the Elektron Net PPLNS pool.\n\nAddress: bc1q...\nNonce: 8c4fa33cea8e69650fa6b50d70ee75be\n\nThis request will not move any funds."}
+```
+
+The `message` string is what needs to be signed — verbatim, including the
+line breaks. It's single-use and expires after 5 minutes; request a fresh
+one if you don't log in within that window.
+
+### 2. Sign the message with your wallet
+
+The address that receives payouts is the one that has to sign — this is a
+read-only operation, it never touches funds or private keys leave your own
+wallet.
+
+- **Bitcoin Core / `elektron-cli`** (only works out of the box for legacy
+  P2PKH addresses in most Core builds; for a `bc1...` address the wallet
+  usually needs the underlying private key handled another way, e.g.
+  `signmessagewithprivkey` if available, or a wallet that supports signing
+  natively from segwit addresses):
+  ```bash
+  elektron-cli signmessage "<address>" "<message>"
+  ```
+- **Electrum**: `Tools → Sign/verify message`, paste the address and the
+  exact message text, sign, copy the resulting base64 signature.
+- **Sparrow Wallet**: right-click the address → `Sign Message`.
+- **Hardware wallets** (Ledger/Trezor via their own apps or Sparrow/Electrum):
+  same flow, the device signs without exposing the private key.
+
+### 3. Log in
+
+```bash
+curl -X POST http://<pool-host>:3334/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"address":"bc1qexampleaddress...","signature":"<base64 signature from step 2>"}'
+```
+
+Response:
+
+```json
+{"accessToken":"eyJhbGciOiJIUzI1NiIs..."}
+```
+
+The token is valid for 24 hours and is scoped to this one address — it
+cannot be used to read or change any other miner's settings. There's no
+refresh endpoint; log in again (from step 1) once it expires.
+
+### 4. Read or update account settings
+
+```bash
+curl http://<pool-host>:3334/api/miner/<address>/account-settings \
+  -H "Authorization: Bearer <accessToken>"
+```
+
+```json
+{"payoutThresholdSatsOverride":null,"notifyOnPayout":false,"poolDefaultPayoutThresholdSats":100000}
+```
+
+```bash
+curl -X PATCH http://<pool-host>:3334/api/miner/<address>/account-settings \
+  -H "Authorization: Bearer <accessToken>" \
+  -H 'Content-Type: application/json' \
+  -d '{"payoutThresholdSatsOverride":50000,"notifyOnPayout":true}'
+```
+
+- `payoutThresholdSatsOverride` — pay this miner out once *their own*
+  balance reaches this many sats, instead of waiting for the pool-wide
+  `MIN_PAYOUT_THRESHOLD_SATS`. Send `null` to clear the override and go back
+  to the pool default. Omit the field entirely to leave it unchanged.
+- `notifyOnPayout` — if `true`, sends a Telegram message on every payout that
+  includes this miner. Requires first linking a chat by messaging the pool's
+  Telegram bot with `/subscribe <address>` (see `TELEGRAM_BOT_TOKEN` above) —
+  without a linked chat this setting has nothing to send to.
+
+Both fields are optional and independent; send only the one you want to
+change.
+
+### 5. Export payout history as CSV
+
+```bash
+curl http://<pool-host>:3334/api/miner/<address>/payout-history/csv -o payout-history.csv
+```
+
+Same data as `/payout-history`, uncapped and in `blockHeight,amountSats,txid,status,timestamp`
+CSV form — meant for tax/bookkeeping records. No login required, same as the
+other read-only endpoints.
 
 ## Web interface
 
