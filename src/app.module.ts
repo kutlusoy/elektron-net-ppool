@@ -49,7 +49,11 @@ const ORMModules = [
 
 @Module({
     imports: [
-        ConfigModule.forRoot(),
+        // isGlobal is required so that ConfigService is injectable from
+        // PplnsSharesModule/PayoutLedgerModule/PoolAccountingModule/PplnsModule
+        // (separate feature modules, unlike the pre-PPLNS services which are
+        // all registered directly on AppModule's own providers array).
+        ConfigModule.forRoot({ isGlobal: true }),
         TypeOrmModule.forRoot({
             type: 'sqlite',
             database: './DB/public-pool.sqlite',

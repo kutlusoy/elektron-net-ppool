@@ -742,6 +742,19 @@ export class StratumV1Client {
                 return false;
             }
 
+            try {
+                // PPLNS share log: recorded BEFORE block-found processing below,
+                // so that if THIS share is the one that finds the block, it is
+                // already in the window when RewardCalculatorService reads it.
+                // Recording it afterwards would systematically exclude every
+                // winning share from its own block's reward split (see concept
+                // doc §5.1 — independent of the coarser StratumV1ClientStatistics
+                // buckets, which stay as-is for the dashboard/vardiff).
+                await this.pplnsShareLogService.record(this.clientAuthorization.address, submissionDifficulty, jobTemplate.blockData.height);
+            } catch (e) {
+                console.error(`PPLNS share log recording failed: ${e?.message ?? e}`);
+            }
+
             if (submissionDifficulty >= jobTemplate.blockData.networkDifficulty) {
                 console.log('!!! BLOCK FOUND !!!');
                 const updatedJobBlock = job.copyAndUpdateBlock(
@@ -791,10 +804,6 @@ export class StratumV1Client {
                 // diff. See StratumV1ClientStatistics.addShares for the full
                 // rationale.
                 await this.statistics.addShares(this.entity, submissionDifficulty);
-                // PPLNS share log: independent, fine-grained record used for the
-                // reward split above (see concept doc §5.1 — the 10-minute buckets
-                // in StratumV1ClientStatistics are too coarse for a 60s block time).
-                await this.pplnsShareLogService.record(this.clientAuthorization.address, submissionDifficulty, jobTemplate.blockData.height);
                 const now = new Date();
                 // only update every minute
                 if (this.entity.updatedAt == null || now.getTime() - this.entity.updatedAt.getTime() > 1000 * 60) {

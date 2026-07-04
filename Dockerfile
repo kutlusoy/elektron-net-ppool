@@ -28,8 +28,11 @@ RUN npm i && npm run build
 
 FROM node:24.16.0-bookworm-slim
 
-# Expose ports for Stratum and Elektron RPC
-EXPOSE 3333 3334 8332
+# Expose Stratum and API ports. 8332 (Elektron RPC) is intentionally NOT
+# exposed here: this container is an RPC *client* to your Elektron node
+# (ELEKTRON_RPC_URL in .env), not an RPC server, so nothing inside this
+# image ever listens on that port.
+EXPOSE 3333 3334
 
 WORKDIR /elektron-pool
 
