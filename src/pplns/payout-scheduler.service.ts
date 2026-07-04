@@ -54,6 +54,24 @@ export class PayoutSchedulerService implements OnModuleInit {
             return;
         }
 
+        // Ledger credits land the moment a block is found (§5.3), independent
+        // of coinbase maturity -- the wallet may simply not have enough
+        // *spendable* balance yet to cover the batch (immature coinbases
+        // don't count towards getbalance's spendable total). sendmany would
+        // fail safely either way (no partial/incorrect payment, see the catch
+        // below), but checking first avoids repeatedly hitting the RPC with a
+        // doomed request every cycle and gives a clear, specific log line
+        // instead of a generic wallet error.
+        const totalRequestedSats = candidates.reduce((sum, c) => sum + c.totalPendingSats, 0);
+        const spendableSats = await this.walletRpc.getWalletBalanceSats();
+        if (spendableSats < totalRequestedSats) {
+            console.log(
+                `PPLNS payout deferred: ${totalRequestedSats} sats owed but only ${spendableSats} sats spendable `
+                + `(the rest is likely still immature coinbase — will retry once it matures).`,
+            );
+            return;
+        }
+
         let txid: string;
         try {
             txid = await this.walletRpc.sendManySats(

@@ -52,7 +52,15 @@ export class BitcoinRpcService implements OnModuleInit {
             auth: {
                 username: user,
                 password: pass
-            }
+            },
+            // Bitcoin-Core-style JSON-RPC servers respond with HTTP 500 (not
+            // 200) whenever the RPC call itself errors -- verified live
+            // against WalletRpcService's identical client. Axios's default
+            // validateStatus rejects any non-2xx as a generic AxiosError
+            // before callRpc() reads response.data.error, discarding the
+            // actual RPC error code/message. Accept every status and always
+            // parse the JSON-RPC envelope ourselves instead.
+            validateStatus: () => true,
         });
 
         this.callRpc('getrpcinfo').then(() => {

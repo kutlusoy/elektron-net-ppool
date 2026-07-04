@@ -59,6 +59,17 @@ export class WalletRpcService implements OnModuleInit {
                 username: user,
                 password: pass,
             },
+            // Bitcoin-Core-style JSON-RPC servers respond with HTTP 500 (not
+            // 200) whenever the RPC call itself errors (verified live: e.g.
+            // code -13 "please enter the wallet passphrase" comes back as a
+            // 500). Axios's default validateStatus rejects any non-2xx as a
+            // generic AxiosError *before* callRpc() ever gets to read
+            // response.data.error -- silently discarding the actual RPC error
+            // code/message callers like PayoutSchedulerService rely on
+            // (e.g. its "wallet is encrypted" hint keyed on error.code === -13).
+            // Accepting every status here and always parsing the JSON-RPC
+            // envelope ourselves makes real error codes reach the caller.
+            validateStatus: () => true,
         });
     }
 
