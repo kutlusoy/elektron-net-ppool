@@ -180,38 +180,111 @@ accepts when the event loop or RSS goes red.
 
 ## Docker
 
-Build container:
+Prerequisites: [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+(Windows/macOS) or Docker Engine (Linux), running before you execute any of
+the commands below. On Windows, use the WSL2 backend (Docker Desktop's
+default) and run the commands from either PowerShell or a WSL2 terminal —
+both work with the syntax below.
 
+**All `docker`/`docker compose` commands must be run from inside the cloned
+repository** (the directory containing `Dockerfile` and `docker-compose.yml`).
+Running them from your home directory or anywhere else is the #1 cause of
+`open Dockerfile: no such file or directory` and the follow-on
+`pull access denied for elektron-pool` (that second error just means the
+build never produced a local image, so Docker fell back to trying — and
+failing — to pull a public image of that name from Docker Hub).
+
+### 1. Clone the repo and create your `.env`
+
+**Linux / macOS (bash):**
 ```bash
-$ docker build -t elektron-pool .
+git clone https://github.com/kutlusoy/elektron-net-ppool.git
+cd elektron-net-ppool
+cp .env.example .env
 ```
 
-Run container:
-
-```bash
-$ docker container run --name elektron-pool --rm -p 3333:3333 -p 3334:3334 -p 8332:8332 -v .env:/elektron-pool/.env elektron-pool
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/kutlusoy/elektron-net-ppool.git
+cd elektron-net-ppool
+Copy-Item .env.example .env
 ```
 
-### Docker Compose
+Now edit `.env` (any text editor) and fill in at least `ELEKTRON_RPC_URL`,
+`ELEKTRON_RPC_USER`/`ELEKTRON_RPC_PASSWORD` (or `ELEKTRON_RPC_COOKIEFILE`),
+and `POOL_WALLET_ADDRESS` — the pool will not build mining jobs without the
+latter. See [PPLNS configuration](#pplns-configuration) above for the rest.
 
-Build container:
+### 2. Docker Compose (recommended)
+
+Compose resolves the `./.env` and `./${NETWORK}-DB` paths in
+`docker-compose.yml` relative to the compose file itself, so it works
+identically on Linux, macOS, and Windows without any path juggling — prefer
+this over the raw `docker build`/`docker run` commands in step 3 unless you
+have a specific reason not to.
+
 ```bash
-$ docker compose build
+docker compose build
+docker compose up -d
 ```
 
-Run container:
+View logs:
 ```bash
-$ docker compose up -d
+docker compose logs -f
 ```
 
-The docker-compose binds to `127.0.0.1` by default. To expose the Stratum services on your server change:
+Stop:
+```bash
+docker compose down
+```
+
+The compose file binds Stratum/API to `127.0.0.1` by default (not reachable
+from other machines). To expose them on your network, edit
+`docker-compose.yml`:
 ```diff
     ports:
--      - "127.0.0.1:3333:3333/tcp"
--      - "127.0.0.1:3334:3334/tcp"
-+      - "3333"
-+      - "3334"
+-      - "127.0.0.1:${STRATUM_PORT}:${STRATUM_PORT}/tcp"
+-      - "127.0.0.1:${API_PORT}:${API_PORT}/tcp"
++      - "${STRATUM_PORT}:${STRATUM_PORT}/tcp"
++      - "${API_PORT}:${API_PORT}/tcp"
 ```
+
+### 3. Raw `docker build`/`docker run` (alternative)
+
+Only needed if you're not using Compose. The bind-mount syntax for `.env`
+differs by shell — this is the other common failure point, since a bare
+`.env` relative path is not resolved the same way by `docker run` on every
+platform.
+
+Build (same command on every OS, run from the repo root):
+```bash
+docker build -t elektron-ppool .
+```
+
+Run — **Linux / macOS (bash):**
+```bash
+docker container run --name elektron-ppool --rm \
+  -p 3333:3333 -p 3334:3334 \
+  -v "$(pwd)/.env:/elektron-pool/.env" \
+  -v "$(pwd)/DB:/elektron-pool/DB" \
+  elektron-ppool
+```
+
+Run — **Windows (PowerShell):**
+```powershell
+docker container run --name elektron-ppool --rm `
+  -p 3333:3333 -p 3334:3334 `
+  -v "${PWD}/.env:/elektron-pool/.env" `
+  -v "${PWD}/DB:/elektron-pool/DB" `
+  elektron-ppool
+```
+
+Note the image name above is `elektron-ppool` (matching the `docker build -t`
+command), not `elektron-pool` (the solo pool's image name) — using the wrong
+name is exactly what produces `pull access denied for elektron-pool`. The
+`8332` RPC port from older instructions is intentionally omitted: the pool is
+an RPC *client* to your Elektron node, not an RPC server itself, so there is
+nothing listening on 8332 inside this container to publish.
 
 **note**: To successfully connect to the Elektron RPC you will need to add
 
