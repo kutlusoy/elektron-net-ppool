@@ -168,6 +168,26 @@ export class BitcoinRpcService implements OnModuleInit {
 
     }
 
+    // Concept doc §11 (login alternative): Elektron Net's wallet software
+    // does not support signmessage for SegWit/bech32 addresses (P2PKH-only),
+    // so AuthService falls back to an on-chain proof for addresses that
+    // can't sign a message -- the miner sends themselves (self-send) an
+    // exact, nonce-derived amount, and this scans the *current* UTXO set
+    // (not the wallet's own UTXOs, so it works for any address, not just
+    // ones the pool's own wallet controls) for a matching unspent output.
+    // scantxoutset works on a pruned node too (pruning drops old block/tx
+    // data, not the current UTXO set), so this doesn't require txindex.
+    public async scanAddressForAmountSats(address: string, expectedAmountSats: number): Promise<boolean> {
+        const result = await this.callRpc<{ success: boolean; unspents: { amount: number }[] }>(
+            'scantxoutset',
+            ['start', [{ desc: `addr(${address})` }]],
+        );
+        if (result?.success !== true || !Array.isArray(result.unspents)) {
+            return false;
+        }
+        return result.unspents.some(utxo => Math.round(utxo.amount * 1e8) === expectedAmountSats);
+    }
+
     public async SUBMIT_BLOCK(hexdata: string): Promise<string> {
         let response: string = 'unknown';
         try {

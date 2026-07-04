@@ -184,24 +184,24 @@ curl -X POST http://<pool-host>:3334/api/auth/challenge \
 Response:
 
 ```json
-{"message":"Sign this message to log in to the Elektron Net PPLNS Pool.\n\nAddress: bc1q...\nNonce: 8c4fa33cea8e69650fa6b50d70ee75be\n\nThis request will not move any funds."}
+{"message":"Sign this message to log in to the Elektron Net PPLNS Pool.\n\nAddress: bc1q...\nNonce: 8c4fa33cea8e69650fa6b50d70ee75be\n\nThis request will not move any funds.","onchain":{"address":"bc1q...","amountSats":42379}}
 ```
 
 The `message` string is what needs to be signed — verbatim, including the
-line breaks. It's single-use and expires after 5 minutes; request a fresh
-one if you don't log in within that window.
+line breaks. It's single-use and expires after 30 minutes; request a fresh
+one if you don't log in within that window. `onchain` is the alternative
+proof described in step 2b below — you only need one of the two methods.
 
-### 2. Sign the message with your wallet
+### 2a. Sign the message with your wallet
 
 The address that receives payouts is the one that has to sign — this is a
 read-only operation, it never touches funds or private keys leave your own
 wallet.
 
-- **Bitcoin Core / `elektron-cli`** (only works out of the box for legacy
-  P2PKH addresses in most Core builds; for a `bc1...` address the wallet
-  usually needs the underlying private key handled another way, e.g.
-  `signmessagewithprivkey` if available, or a wallet that supports signing
-  natively from segwit addresses):
+- **Bitcoin Core / `elektron-cli`** (only works for legacy P2PKH addresses
+  — Bitcoin Core's `signmessage` does not support SegWit/bech32 addresses,
+  and neither does Elektron Net's own wallet, GUI or CLI, as of this
+  writing):
   ```bash
   elektron-cli signmessage "<address>" "<message>"
   ```
@@ -211,15 +211,40 @@ wallet.
 - **Hardware wallets** (Ledger/Trezor via their own apps or Sparrow/Electrum):
   same flow, the device signs without exposing the private key.
 
-### 3. Log in
+Then log in with the signature:
 
 ```bash
 curl -X POST http://<pool-host>:3334/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"address":"bc1qexampleaddress...","signature":"<base64 signature from step 2>"}'
+  -d '{"address":"bc1qexampleaddress...","signature":"<base64 signature from step 2a>"}'
 ```
 
-Response:
+### 2b. On-chain proof (works for any address type, including SegWit/bech32)
+
+Use this if your wallet can't sign a message for your address — Elektron
+Net's own wallet included, since its `signmessage` only supports legacy
+P2PKH. Instead of signing, send yourself (self-send, same address as both
+sender and recipient) **exactly** `onchain.amountSats` from the challenge
+response above, using your wallet's normal send screen — no special
+transaction construction needed, any wallet that can send at all supports
+this regardless of address type. Wait for at least one confirmation, then:
+
+```bash
+curl -X POST http://<pool-host>:3334/api/auth/onchain-login \
+  -H 'Content-Type: application/json' \
+  -d '{"address":"bc1qexampleaddress..."}'
+```
+
+This checks the current UTXO set (`scantxoutset`, works on a pruned node
+too) for a still-unspent output at your address matching that exact
+amount. If your self-send hasn't confirmed yet, this returns 401 with a
+message telling you to wait and retry — poll it every 10-15s until it
+succeeds. Once matched, the amount is consumed (tied to that one login
+only) and can't be reused for a second login.
+
+### 3. Use the access token
+
+Either method above returns the same response:
 
 ```json
 {"accessToken":"eyJhbGciOiJIUzI1NiIs..."}
