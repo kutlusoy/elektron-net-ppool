@@ -4,8 +4,19 @@ import axios, { AxiosInstance } from 'axios';
 import * as bitcoinjs from 'bitcoinjs-lib';
 import { Block } from 'bitcoinjs-lib';
 
+import { PayoutLedgerService } from '../ORM/payout-ledger/payout-ledger.service';
 import { TelegramSubscriptionsService } from '../ORM/telegram-subscriptions/telegram-subscriptions.service';
 import { resolveConfiguredNetwork } from '../utils/elektron-network';
+
+const HELP_TEXT = [
+    'Elektron Net PPLNS Pool bot commands:',
+    '/subscribe <address> - get notified here about blocks found and payouts for this address',
+    '/unsubscribe <address> - stop notifications for this address',
+    '/unsubscribe - stop all notifications for this chat',
+    '/list - show which addresses you are subscribed to',
+    '/balance <address> - show the pending (not yet paid out) balance for this address',
+    '/help - show this message',
+].join('\n');
 
 
 @Injectable()
@@ -19,7 +30,8 @@ export class TelegramService implements OnModuleInit {
 
     constructor(
         private readonly configService: ConfigService,
-        private readonly telegramSubscriptionsService: TelegramSubscriptionsService
+        private readonly telegramSubscriptionsService: TelegramSubscriptionsService,
+        private readonly payoutLedgerService: PayoutLedgerService,
     ) {
         // .trim() guards against a trailing \r/whitespace on the token value
         // (e.g. a .env file edited on Windows and saved with CRLF line
@@ -152,23 +164,71 @@ export class TelegramService implements OnModuleInit {
             return;
         }
 
-        if (msg.text.startsWith('/subscribe')) {
-            const address = msg.text.split('/subscribe ')[1];
-            if (!this.isValidAddress(address)) {
-                await this.sendMessage(msg.chat.id, 'Invalid address.');
+        const text: string = msg.text.trim();
+        const chatId = msg.chat.id;
+
+        // /unsubscribe is checked before /subscribe's startsWith below would
+        // never actually collide (they diverge at the 2nd character), kept
+        // as separate branches for clarity rather than a shared prefix check.
+        if (text.startsWith('/unsubscribe')) {
+            const address = this.extractArg(text, '/unsubscribe');
+            if (address == null) {
+                const removed = await this.telegramSubscriptionsService.removeAllSubscriptions(chatId);
+                await this.sendMessage(chatId, removed > 0
+                    ? `Unsubscribed from all ${removed} address(es).`
+                    : `You weren't subscribed to anything.`);
                 return;
             }
-            await this.telegramSubscriptionsService.saveSubscription(msg.chat.id, address);
-            await this.sendMessage(msg.chat.id, 'Subscribed!');
+            const removed = await this.telegramSubscriptionsService.removeSubscription(chatId, address);
+            await this.sendMessage(chatId, removed
+                ? `Unsubscribed from ${address}.`
+                : `You weren't subscribed to ${address}.`);
             return;
         }
 
-        if (msg.text.startsWith('/start')) {
-            await this.sendMessage(msg.chat.id, 'Welcome to the Elektron Net PPLNS Pool bot. /subscribe <address> to get notified.');
+        if (text.startsWith('/subscribe')) {
+            const address = this.extractArg(text, '/subscribe');
+            if (!this.isValidAddress(address)) {
+                await this.sendMessage(chatId, 'Invalid address. Usage: /subscribe <address>');
+                return;
+            }
+            await this.telegramSubscriptionsService.saveSubscription(chatId, address);
+            await this.sendMessage(chatId, `Subscribed! You'll be notified here about blocks found and payouts for ${address}.`);
+            return;
+        }
+
+        if (text.startsWith('/list')) {
+            const subscriptions = await this.telegramSubscriptionsService.getSubscriptionsForChat(chatId);
+            await this.sendMessage(chatId, subscriptions.length > 0
+                ? `Subscribed addresses:\n${subscriptions.map(s => s.address).join('\n')}`
+                : `You're not subscribed to any address yet. Use /subscribe <address>.`);
+            return;
+        }
+
+        if (text.startsWith('/balance')) {
+            const address = this.extractArg(text, '/balance');
+            if (!this.isValidAddress(address)) {
+                await this.sendMessage(chatId, 'Usage: /balance <address>');
+                return;
+            }
+            const pendingSats = await this.payoutLedgerService.getPendingTotal(address);
+            await this.sendMessage(chatId, `Pending (not yet paid out) balance for ${address}: ${pendingSats.toLocaleString('en-US')} lep`);
+            return;
+        }
+
+        if (text.startsWith('/help') || text.startsWith('/start')) {
+            await this.sendMessage(chatId, HELP_TEXT);
             return;
         }
 
         console.log(msg);
+    }
+
+    // Everything after the command word, trimmed; undefined if nothing
+    // follows (e.g. bare "/unsubscribe" vs "/unsubscribe <address>").
+    private extractArg(text: string, command: string): string | undefined {
+        const rest = text.slice(command.length).trim();
+        return rest.length > 0 ? rest : undefined;
     }
 
     // The generic `bitcoin-address-validation` npm package only recognizes

@@ -289,6 +289,16 @@ curl -X PATCH http://<pool-host>:3334/api/miner/<address>/account-settings \
   `t.me/<username>` link here instead of just the generic instructions —
   purely cosmetic, exposed read-only via `GET /api/pool/telegram-info`.
 
+  The bot itself understands:
+  - `/subscribe <address>` — link this chat to an address (block-found and
+    opted-in payout notifications). Safe to repeat; it won't create
+    duplicate subscriptions.
+  - `/unsubscribe <address>` — unlink just that address.
+  - `/unsubscribe` (no address) — unlink everything this chat is subscribed to.
+  - `/list` — show which addresses this chat is currently subscribed to.
+  - `/balance <address>` — show that address's pending (not yet paid out) balance.
+  - `/help` (or `/start`) — list all of the above.
+
 Both fields are optional and independent; send only the one you want to
 change.
 
