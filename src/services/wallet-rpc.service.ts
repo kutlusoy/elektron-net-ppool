@@ -10,12 +10,14 @@ import * as fs from 'node:fs';
 // server) but can point at a dedicated wallet server (Scenario B, §9.3) via
 // config alone, without a code change.
 const DEFAULT_WALLET_UNLOCK_SECONDS = 60;
-// Elektron Net's own network minimum (DEFAULT_MIN_RELAY_TX_FEE = 100 sat/kvB,
-// policy.h => 0.1 sat/vB) -- used as the payout fallback fee rate when
+// 1000 sat/kvB (1 sat/vB) -- used as the payout fallback fee rate when
 // estimatesmartfee has no data yet (a young chain with too little fee
 // history) and -fallbackfee is disabled on the node (Bitcoin Core's own
-// default, matched here).
-const DEFAULT_FALLBACK_FEE_RATE_SATS_PER_VB = 0.1;
+// default). Matches the manual fee rate the pool operator already uses in
+// the Elektron Net GUI wallet for the same "fee estimation unavailable"
+// situation, well above the network's bare minimum (DEFAULT_MIN_RELAY_TX_FEE
+// = 100 sat/kvB, policy.h) for faster confirmation.
+const DEFAULT_FALLBACK_FEE_RATE_SATS_PER_VB = 1;
 
 @Injectable()
 export class WalletRpcService implements OnModuleInit {
