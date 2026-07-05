@@ -71,6 +71,13 @@ export class PplnsController {
         return { windowMinutes, totalDifficultyInWindow, activeMinerCount };
     }
 
+    @Get('pool/telegram-info')
+    async getTelegramInfo() {
+        const rawUsername = this.configService.get<string>('TELEGRAM_BOT_USERNAME')?.trim();
+        const botUsername = rawUsername ? rawUsername.replace(/^@/, '') : null;
+        return { botUsername };
+    }
+
     @Get('pool/fee-info')
     async getFeeInfo() {
         const feePercent = parseFloat(this.configService.get<string>('POOL_FEE_PERCENT'));
