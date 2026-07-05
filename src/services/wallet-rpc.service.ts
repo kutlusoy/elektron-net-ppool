@@ -10,6 +10,11 @@ import * as fs from 'node:fs';
 // server) but can point at a dedicated wallet server (Scenario B, §9.3) via
 // config alone, without a code change.
 const DEFAULT_WALLET_UNLOCK_SECONDS = 60;
+// Elektron Net's own network minimum (DEFAULT_MIN_RELAY_TX_FEE, policy.h) --
+// used as the payout fallback fee rate when estimatesmartfee has no data yet
+// (a young chain with too little fee history) and -fallbackfee is disabled
+// on the node (Bitcoin Core's own default, matched here).
+const DEFAULT_FALLBACK_FEE_SATS_PER_KVB = 100;
 
 @Injectable()
 export class WalletRpcService implements OnModuleInit {
@@ -93,12 +98,12 @@ export class WalletRpcService implements OnModuleInit {
         const minConfirmations = 1;
 
         if (this.walletPassphrase == null) {
-            return await this.callRpc<string>('sendmany', ['', amounts, minConfirmations, comment]);
+            return await this.sendManyWithFeeFallback(amounts, minConfirmations, comment);
         }
 
         await this.callRpc('walletpassphrase', [this.walletPassphrase, this.walletUnlockSeconds]);
         try {
-            return await this.callRpc<string>('sendmany', ['', amounts, minConfirmations, comment]);
+            return await this.sendManyWithFeeFallback(amounts, minConfirmations, comment);
         } finally {
             try {
                 await this.callRpc('walletlock', []);
@@ -108,6 +113,51 @@ export class WalletRpcService implements OnModuleInit {
                 console.warn(`Failed to explicitly re-lock the wallet after payout attempt: ${e?.message ?? e}`);
             }
         }
+    }
+
+    // A young chain often doesn't have enough fee history yet for
+    // estimatesmartfee, and -fallbackfee is disabled by default (same as
+    // modern Bitcoin Core) -- sendmany then fails outright instead of
+    // guessing ("Fee estimation failed. Fallbackfee is disabled."). Rather
+    // than requiring every node operator to set -fallbackfee, retry once
+    // with an explicit fixed fee rate (PAYOUT_FALLBACK_FEE_SATS_PER_KVB,
+    // defaulting to Elektron Net's own network minimum) via settxfee, then
+    // immediately restore automatic estimation (settxfee 0) so later cycles
+    // benefit once the chain has enough data for estimatesmartfee to work.
+    private async sendManyWithFeeFallback(amounts: Record<string, string>, minConfirmations: number, comment: string): Promise<string> {
+        try {
+            return await this.callRpc<string>('sendmany', ['', amounts, minConfirmations, comment]);
+        } catch (e) {
+            if (!this.isFeeEstimationFailure(e)) {
+                throw e;
+            }
+
+            const fallbackFeeSatsPerKvb = this.getFallbackFeeSatsPerKvb();
+            console.warn(
+                `Fee estimation unavailable (network likely too young to have enough fee data yet) -- `
+                + `retrying this payout with a fixed fallback fee of ${fallbackFeeSatsPerKvb} lep/kvB.`,
+            );
+
+            await this.callRpc('settxfee', [(fallbackFeeSatsPerKvb / 1e8).toFixed(8)]);
+            try {
+                return await this.callRpc<string>('sendmany', ['', amounts, minConfirmations, comment]);
+            } finally {
+                try {
+                    await this.callRpc('settxfee', [0]);
+                } catch (e2) {
+                    console.warn(`Failed to restore automatic fee estimation after the fallback payout attempt: ${e2?.message ?? e2}`);
+                }
+            }
+        }
+    }
+
+    private isFeeEstimationFailure(e: any): boolean {
+        return typeof e?.message === 'string' && e.message.toLowerCase().includes('fee estimation failed');
+    }
+
+    private getFallbackFeeSatsPerKvb(): number {
+        const configured = parseInt(this.configService.get<string>('PAYOUT_FALLBACK_FEE_SATS_PER_KVB'), 10);
+        return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_FALLBACK_FEE_SATS_PER_KVB;
     }
 
     public async getConfirmations(txid: string): Promise<number> {
