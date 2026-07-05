@@ -51,7 +51,8 @@ export class WalletRpcService implements OnModuleInit {
             ? unlockSeconds
             : DEFAULT_WALLET_UNLOCK_SECONDS;
 
-        const baseURL = this.buildRpcUrl(url, port);
+        const walletName = this.configService.get<string>('WALLET_RPC_WALLET_NAME');
+        const baseURL = this.buildRpcUrl(url, port, walletName);
         this.client = axios.create({
             baseURL,
             timeout,
@@ -146,11 +147,19 @@ export class WalletRpcService implements OnModuleInit {
         return response.data.result;
     }
 
-    private buildRpcUrl(url: string, port: number): string {
+    // Bitcoin-Core-style nodes with more than one wallet loaded reject
+    // wallet RPCs made against the bare "/" endpoint ("Multiple wallets are
+    // loaded...") -- they must be addressed as /wallet/<name> instead. A
+    // node with only one wallet loaded accepts both forms, so this is safe
+    // to always apply once WALLET_RPC_WALLET_NAME is set.
+    private buildRpcUrl(url: string, port: number, walletName?: string): string {
         const normalizedUrl = /^https?:\/\//i.test(url) ? url : `http://${url}`;
         const rpcUrl = new URL(normalizedUrl);
         if (Number.isFinite(port) && port > 0) {
             rpcUrl.port = port.toString();
+        }
+        if (walletName != null && walletName.length > 0) {
+            rpcUrl.pathname = `/wallet/${encodeURIComponent(walletName)}`;
         }
         return rpcUrl.toString();
     }
