@@ -75,6 +75,32 @@ export class PayoutLedgerService {
         }));
     }
 
+    // Same as getAllPendingTotals, but only sums credits from blocks that
+    // have themselves individually reached coinbase maturity (blockHeight
+    // <= matureUpToHeight). A miner who keeps finding new blocks would
+    // otherwise never get paid under the old all-or-nothing total: every
+    // fresh (immature) credit raised what the wallet needed to cover before
+    // anything could go out at all, even funds that had long since matured.
+    // Rows from blocks that haven't matured yet are simply left PENDING and
+    // picked up once they do.
+    public async getMaturePendingTotals(matureUpToHeight: number): Promise<IPendingPayoutCandidate[]> {
+        const rows = await this.payoutLedgerRepository
+            .createQueryBuilder('ledger')
+            .select('ledger.minerAddress', 'minerAddress')
+            .addSelect('SUM(ledger.amountSats)', 'totalPendingSats')
+            .addSelect('MAX(ledger.id)', 'maxRowId')
+            .where('ledger.status = :status', { status: ePayoutStatus.PENDING })
+            .andWhere('ledger.blockHeight <= :matureUpToHeight', { matureUpToHeight })
+            .groupBy('ledger.minerAddress')
+            .getRawMany();
+
+        return rows.map(row => ({
+            minerAddress: row.minerAddress,
+            totalPendingSats: Number(row.totalPendingSats),
+            maxRowId: Number(row.maxRowId),
+        }));
+    }
+
     public async markSentUpTo(minerAddress: string, maxRowId: number, txid: string): Promise<void> {
         await this.payoutLedgerRepository
             .createQueryBuilder()

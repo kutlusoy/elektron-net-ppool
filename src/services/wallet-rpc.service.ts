@@ -119,6 +119,18 @@ export class WalletRpcService implements OnModuleInit {
         return Math.round(result * 1e8);
     }
 
+    // Spendable (mature, confirmed) balance plus still-immature coinbase --
+    // i.e. everything the wallet actually holds, regardless of whether it's
+    // spendable yet. Used for reconciliation against the *total* pending
+    // ledger (which also includes not-yet-mature credits) -- getbalance()
+    // alone would look like a permanent shortfall any time there's recently
+    // found, still-immature blocks, which is the normal/expected state for
+    // an actively mining pool, not a mismatch.
+    public async getWalletTotalBalanceSats(): Promise<number> {
+        const result = await this.callRpc<{ balance: number; immature_balance: number }>('getwalletinfo');
+        return Math.round((result.balance + result.immature_balance) * 1e8);
+    }
+
     private async callRpc<T>(method: string, params: unknown[] = []): Promise<T> {
         const response = await this.client.post('', {
             jsonrpc: '1.0',

@@ -3,12 +3,18 @@ import { ConfigService } from '@nestjs/config';
 
 import { PayoutLedgerService } from '../ORM/payout-ledger/payout-ledger.service';
 import { MinerAccountSettingsService } from '../ORM/miner-account-settings/miner-account-settings.service';
+import { BitcoinRpcService } from '../services/bitcoin-rpc.service';
 import { NotificationService } from '../services/notification.service';
 import { WalletRpcService } from '../services/wallet-rpc.service';
 
 const DEFAULT_MIN_PAYOUT_THRESHOLD_SATS = 100000;
 const DEFAULT_PAYOUT_INTERVAL_MINUTES = 60;
 const DEFAULT_CONFIRMATIONS_REQUIRED = 1;
+// Elektron Net's consensus rule (consensus.h: COINBASE_MATURITY = 100,
+// unchanged from Bitcoin) -- a block's reward simply cannot be spent by
+// anyone, pool included, before this many confirmations, regardless of any
+// pool-side config. Kept overridable only in case a future fork changes it.
+const DEFAULT_COINBASE_MATURITY = 100;
 // §9.3.2: alert rather than auto-correct on a pool-DB vs wallet mismatch.
 // Allow a small tolerance for lep already earmarked as fee/dust that never
 // hit the ledger as a miner credit.
@@ -29,6 +35,7 @@ export class PayoutSchedulerService implements OnModuleInit {
         private readonly configService: ConfigService,
         private readonly minerAccountSettings: MinerAccountSettingsService,
         private readonly notificationService: NotificationService,
+        private readonly bitcoinRpc: BitcoinRpcService,
     ) {
     }
 
@@ -48,7 +55,23 @@ export class PayoutSchedulerService implements OnModuleInit {
 
     public async runPayoutCycle(): Promise<void> {
         const poolThresholdSats = this.getMinPayoutThresholdSats();
-        const allPending = await this.payoutLedger.getAllPendingTotals();
+
+        // Only request payout for credits whose *own* block has matured.
+        // Checking against the miner's *entire* pending total here (as this
+        // used to) meant a miner who kept finding new blocks would never get
+        // paid at all: every fresh, still-immature credit raised the total
+        // the wallet needed to cover before anything could go out, even
+        // funds that had long since matured and were sitting spendable in
+        // the wallet the whole time. Immature rows are simply left PENDING
+        // and picked up by a later cycle once they mature.
+        const currentHeight = (await this.bitcoinRpc.getMiningInfo())?.blocks;
+        if (!Number.isFinite(currentHeight)) {
+            console.warn('PPLNS payout cycle skipped: could not read the current block height.');
+            return;
+        }
+        const matureUpToHeight = currentHeight - this.getCoinbaseMaturity() + 1;
+
+        const allPending = await this.payoutLedger.getMaturePendingTotals(matureUpToHeight);
         if (allPending.length === 0) {
             return;
         }
@@ -67,20 +90,19 @@ export class PayoutSchedulerService implements OnModuleInit {
             return;
         }
 
-        // Ledger credits land the moment a block is found (§5.3), independent
-        // of coinbase maturity -- the wallet may simply not have enough
-        // *spendable* balance yet to cover the batch (immature coinbases
-        // don't count towards getbalance's spendable total). sendmany would
-        // fail safely either way (no partial/incorrect payment, see the catch
-        // below), but checking first avoids repeatedly hitting the RPC with a
-        // doomed request every cycle and gives a clear, specific log line
-        // instead of a generic wallet error.
+        // At this point every candidate lep is already backed by a matured
+        // block, so this should normally already hold -- this remains only
+        // as a safety net (e.g. funds moved out of the wallet some other
+        // way) rather than the routine gate it used to be. sendmany would
+        // fail safely either way (no partial/incorrect payment, see the
+        // catch below), but checking first avoids a doomed RPC call and
+        // gives a clear, specific log line instead of a generic wallet error.
         const totalRequestedSats = candidates.reduce((sum, c) => sum + c.totalPendingSats, 0);
         const spendableSats = await this.walletRpc.getWalletBalanceSats();
         if (spendableSats < totalRequestedSats) {
             console.log(
-                `PPLNS payout deferred: ${totalRequestedSats} lep owed but only ${spendableSats} lep spendable `
-                + `(the rest is likely still immature coinbase — will retry once it matures).`,
+                `PPLNS payout deferred: ${totalRequestedSats} lep owed (from already-matured blocks) but only `
+                + `${spendableSats} lep spendable in the wallet -- check for unexpected outgoing wallet activity.`,
             );
             return;
         }
@@ -133,16 +155,20 @@ export class PayoutSchedulerService implements OnModuleInit {
 
     public async checkPoolWalletReconciliation(): Promise<void> {
         try {
+            // Total holdings (spendable + still-immature), not just spendable
+            // -- compared against *all* pending (mature + immature) below, so
+            // a pool that's actively finding blocks doesn't trip this every
+            // cycle just because some of what it holds isn't spendable yet.
             const [walletBalanceSats, totalPendingSats] = await Promise.all([
-                this.walletRpc.getWalletBalanceSats(),
+                this.walletRpc.getWalletTotalBalanceSats(),
                 this.payoutLedger.getTotalPendingAcrossAllMiners(),
             ]);
 
             if (walletBalanceSats + RECONCILIATION_TOLERANCE_SATS < totalPendingSats) {
                 console.error(
-                    `PPLNS RECONCILIATION MISMATCH: pool wallet balance (${walletBalanceSats} lep) is below `
-                    + `total miner balances owed (${totalPendingSats} lep). Manual investigation required — `
-                    + `this alert does not auto-correct anything.`,
+                    `PPLNS RECONCILIATION MISMATCH: pool wallet balance (${walletBalanceSats} lep, `
+                    + `spendable + immature) is below total miner balances owed (${totalPendingSats} lep). `
+                    + `Manual investigation required — this alert does not auto-correct anything.`,
                 );
             }
         } catch (e) {
@@ -157,6 +183,11 @@ export class PayoutSchedulerService implements OnModuleInit {
     private getMinPayoutThresholdSats(): number {
         const configured = parseInt(this.configService.get<string>('MIN_PAYOUT_THRESHOLD_SATS'), 10);
         return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_MIN_PAYOUT_THRESHOLD_SATS;
+    }
+
+    private getCoinbaseMaturity(): number {
+        const configured = parseInt(this.configService.get<string>('COINBASE_MATURITY'), 10);
+        return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_COINBASE_MATURITY;
     }
 
     private getIntervalMinutes(): number {
