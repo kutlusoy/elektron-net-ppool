@@ -26,7 +26,11 @@ is subsequently split:
 - `PayoutSchedulerService` batches up miner balances above
   `MIN_PAYOUT_THRESHOLD_SATS` into a periodic `sendmany`-style payout
   transaction, and reconciles sent transactions against confirmations and
-  the pool wallet's on-chain balance.
+  the pool wallet's on-chain balance. Only credits from blocks that have
+  themselves reached `COINBASE_MATURITY` confirmations (100 by default,
+  same as Bitcoin) are ever requested for payout — a miner who keeps
+  finding new blocks still gets paid for the already-matured ones instead
+  of waiting on the newest, still-immature one every cycle.
 - The UI is served by the sibling
   [`elektron-net-ppool-ui`](https://github.com/kutlusoy/elektron-net-ppool-ui)
   repo, itself a fork of `elektron-net-pool-ui` with PPLNS-specific views
