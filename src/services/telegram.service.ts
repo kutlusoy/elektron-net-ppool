@@ -18,7 +18,11 @@ export class TelegramService implements OnModuleInit {
         private readonly configService: ConfigService,
         private readonly telegramSubscriptionsService: TelegramSubscriptionsService
     ) {
-        const token: string | null = this.configService.get('TELEGRAM_BOT_TOKEN');
+        // .trim() guards against a trailing \r/whitespace on the token value
+        // (e.g. a .env file edited on Windows and saved with CRLF line
+        // endings), which would otherwise silently break every request to
+        // the Telegram API with an invalid URL/token.
+        const token: string | null = this.configService.get('TELEGRAM_BOT_TOKEN')?.trim();
         if (token == null || token.length < 1) {
             return;
         }
@@ -83,7 +87,12 @@ export class TelegramService implements OnModuleInit {
                 await this.handleMessage(update.message);
             }
         } catch (e) {
-            console.error('Telegram polling failed', e.message);
+            // Telegram's own error description (e.g. "Unauthorized" for a bad
+            // token, or "terminated by other getUpdates request" if the same
+            // token is polled from more than one place) is much more useful
+            // here than the generic Axios "Request failed with status code
+            // ___" message.
+            console.error('Telegram polling failed:', e.response?.data?.description ?? e.message);
         }
     }
 

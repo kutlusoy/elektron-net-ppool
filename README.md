@@ -227,7 +227,10 @@ P2PKH. Instead of signing, send yourself (self-send, same address as both
 sender and recipient) **exactly** `onchain.amountSats` from the challenge
 response above, using your wallet's normal send screen — no special
 transaction construction needed, any wallet that can send at all supports
-this regardless of address type. Wait for at least one confirmation, then:
+this regardless of address type. The UI builds this as a BIP21-style
+`elek:<address>?amount=<ELEK>&label=...` link that the Elektron Net GUI
+wallet's **File > Open URI...** dialog accepts directly, filling in both
+fields at once. Wait for at least one confirmation, then:
 
 ```bash
 curl -X POST http://<pool-host>:3334/api/auth/onchain-login \
@@ -281,7 +284,10 @@ curl -X PATCH http://<pool-host>:3334/api/miner/<address>/account-settings \
 - `notifyOnPayout` — if `true`, sends a Telegram message on every payout that
   includes this miner. Requires first linking a chat by messaging the pool's
   Telegram bot with `/subscribe <address>` (see `TELEGRAM_BOT_TOKEN` above) —
-  without a linked chat this setting has nothing to send to.
+  without a linked chat this setting has nothing to send to. Set
+  `TELEGRAM_BOT_USERNAME` (without the `@`) so the UI can show a clickable
+  `t.me/<username>` link here instead of just the generic instructions —
+  purely cosmetic, exposed read-only via `GET /api/pool/telegram-info`.
 
 Both fields are optional and independent; send only the one you want to
 change.
