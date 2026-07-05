@@ -90,7 +90,7 @@ export class AuthService implements OnModuleInit {
         if (!found) {
             throw new UnauthorizedException(
                 `No matching on-chain payment seen yet. Send yourself (self-send) exactly `
-                + `${challenge.requiredAmountSats} sats from ${address}, wait for it to confirm, then try again.`,
+                + `${challenge.requiredAmountSats} lep from ${address}, wait for it to confirm, then try again.`,
             );
         }
 
