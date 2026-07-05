@@ -15,6 +15,7 @@ export class TelegramService implements OnModuleInit {
     private updateOffset = 0;
     private pollingTimer: NodeJS.Timeout;
     private conflictBackoffUntil = 0;
+    private isPolling = false;
 
     constructor(
         private readonly configService: ConfigService,
@@ -90,6 +91,19 @@ export class TelegramService implements OnModuleInit {
             return;
         }
 
+        // The interval below fires every 2s regardless of whether the
+        // previous call has come back yet -- on a slow/laggy connection to
+        // api.telegram.org (seen e.g. behind Docker Desktop for Windows'
+        // NAT/WSL2 networking), a single request taking longer than that
+        // would otherwise let two getUpdates calls run at once from this
+        // *same* process/token, which is enough on its own to make Telegram
+        // reject one of them with a 409 conflict -- no second process
+        // required.
+        if (this.isPolling) {
+            return;
+        }
+        this.isPolling = true;
+
         try {
             const response = await this.bot.get('getUpdates', {
                 params: {
@@ -128,6 +142,8 @@ export class TelegramService implements OnModuleInit {
             }
 
             console.error('Telegram polling failed:', description ?? e.message);
+        } finally {
+            this.isPolling = false;
         }
     }
 
