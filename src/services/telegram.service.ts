@@ -14,6 +14,8 @@ export class TelegramService implements OnModuleInit {
     private bot: AxiosInstance;
     private updateOffset = 0;
     private pollingTimer: NodeJS.Timeout;
+    private conflictBackoffUntil = 0;
+    private isPolling = false;
 
     constructor(
         private readonly configService: ConfigService,
@@ -85,6 +87,23 @@ export class TelegramService implements OnModuleInit {
     }
 
     private async pollUpdates() {
+        if (Date.now() < this.conflictBackoffUntil) {
+            return;
+        }
+
+        // The interval below fires every 2s regardless of whether the
+        // previous call has come back yet -- on a slow/laggy connection to
+        // api.telegram.org (seen e.g. behind Docker Desktop for Windows'
+        // NAT/WSL2 networking), a single request taking longer than that
+        // would otherwise let two getUpdates calls run at once from this
+        // *same* process/token, which is enough on its own to make Telegram
+        // reject one of them with a 409 conflict -- no second process
+        // required.
+        if (this.isPolling) {
+            return;
+        }
+        this.isPolling = true;
+
         try {
             const response = await this.bot.get('getUpdates', {
                 params: {
@@ -103,7 +122,28 @@ export class TelegramService implements OnModuleInit {
             // token is polled from more than one place) is much more useful
             // here than the generic Axios "Request failed with status code
             // ___" message.
-            console.error('Telegram polling failed:', e.response?.data?.description ?? e.message);
+            const description: string | undefined = e.response?.data?.description;
+
+            // A 409 means Telegram is seeing getUpdates called concurrently
+            // with this same token from somewhere else entirely (a leftover
+            // old container/process that was never stopped, a second
+            // deployment, a local test run, ...) -- not something the app
+            // retrying faster can fix. Back off instead of retrying every
+            // 2s forever and flooding the logs with the same line.
+            if (e.response?.status === 409) {
+                this.conflictBackoffUntil = Date.now() + 60000;
+                console.error(
+                    'Telegram getUpdates conflict: another process is polling this bot token '
+                    + '(old container/process not stopped, or the token is used elsewhere). '
+                    + 'Pausing polling for 60s. Find and stop the other instance -- this will '
+                    + 'keep repeating until only one process uses this TELEGRAM_BOT_TOKEN.',
+                );
+                return;
+            }
+
+            console.error('Telegram polling failed:', description ?? e.message);
+        } finally {
+            this.isPolling = false;
         }
     }
 
