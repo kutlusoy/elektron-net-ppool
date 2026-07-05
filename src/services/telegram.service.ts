@@ -1,10 +1,11 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
-import { validate } from 'bitcoin-address-validation';
+import * as bitcoinjs from 'bitcoinjs-lib';
 import { Block } from 'bitcoinjs-lib';
 
 import { TelegramSubscriptionsService } from '../ORM/telegram-subscriptions/telegram-subscriptions.service';
+import { resolveConfiguredNetwork } from '../utils/elektron-network';
 
 
 @Injectable()
@@ -38,6 +39,16 @@ export class TelegramService implements OnModuleInit {
     async onModuleInit(): Promise<void> {
 
         if (this.bot == null) {
+            return;
+        }
+
+        // Under a multi-instance (e.g. PM2 cluster mode) deployment, only
+        // instance 0 should poll -- otherwise every instance independently
+        // calls getUpdates with the same stale offset and can all receive
+        // (and reply to) the same update, producing duplicate messages like
+        // two "Welcome" replies to a single /start. Mirrors the guard already
+        // used by DiscordService/LogRotationService/PayoutSchedulerService.
+        if (process.env.NODE_APP_INSTANCE != null && process.env.NODE_APP_INSTANCE != '0') {
             return;
         }
 
@@ -103,7 +114,7 @@ export class TelegramService implements OnModuleInit {
 
         if (msg.text.startsWith('/subscribe')) {
             const address = msg.text.split('/subscribe ')[1];
-            if (validate(address) == false) {
+            if (!this.isValidAddress(address)) {
                 await this.sendMessage(msg.chat.id, 'Invalid address.');
                 return;
             }
@@ -118,6 +129,27 @@ export class TelegramService implements OnModuleInit {
         }
 
         console.log(msg);
+    }
+
+    // The generic `bitcoin-address-validation` npm package only recognizes
+    // stock Bitcoin network prefixes, not Elektron Net's own bech32 HRP
+    // (`be` on mainnet) -- it rejected every real mainnet address here.
+    // Validate the same way BitcoinAddressValidator/StratumV1Client do
+    // instead, against the pool's actually configured network.
+    private isValidAddress(address: string | undefined): boolean {
+        if (address == null || address.length < 1) {
+            return false;
+        }
+        const network = resolveConfiguredNetwork(this.configService);
+        if (network == null) {
+            return false;
+        }
+        try {
+            bitcoinjs.address.toOutputScript(address, network);
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     private async sendMessage(chatId: number | string, text: string) {
