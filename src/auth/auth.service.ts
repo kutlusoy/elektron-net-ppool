@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bitcoinMessage from 'bitcoinjs-message';
@@ -13,7 +13,9 @@ export interface IJwtPayload {
 }
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
+
+    private readonly logger = new Logger(AuthService.name);
 
     constructor(
         private readonly challengeStore: AuthChallengeStore,
@@ -21,6 +23,14 @@ export class AuthService {
         private readonly configService: ConfigService,
         private readonly bitcoinRpc: BitcoinRpcService,
     ) {
+    }
+
+    // Validate JWT_SECRET at boot so a missing/too-short value fails the
+    // startup loudly, instead of only surfacing as an opaque 500 the first
+    // time a miner tries to log in.
+    public onModuleInit(): void {
+        this.getJwtSecret();
+        this.logger.log('JWT_SECRET is configured.');
     }
 
     public createChallenge(address: string): { message: string; onchain: { address: string; amountSats: number } } {
