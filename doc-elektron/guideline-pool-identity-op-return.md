@@ -1,6 +1,6 @@
 # Elektron Net - `elektron-net-ppool` Pool Identity OP_RETURN Guideline
 
-- **Version:** 0.1 (draft)
+- **Version:** 0.2 (implemented on `poolidentity`, pending review/merge and live testing before `main`)
 - **Date:** August 27, 2026
 - **Audience:** `elektron-net-ppool` / `elektron-net-pool` developers, mining pool operators
 - **Reference implementation:** [`elektron-net`](https://github.com/kutlusoy/elektron-net) - `doc-elektron/guideline-coinbase-third-op-return.md` (the decided design this document extends), `src/validation.cpp` (`ExtractCoinbaseUTXOAttestation()`), `src/consensus/validation.h` (`GetWitnessCommitmentIndex()`) - treat as ground truth for anything referenced below
@@ -16,7 +16,7 @@
 
 This is a **plan, not yet implemented**. It specifies the concrete `elektron-net-ppool` implementation of the pool-side coinbase output that `elektron-net`'s `doc-elektron/guideline-coinbase-third-op-return.md` (v1.0, Section 5) already decided is safe to add without a consensus change, extended per an explicit follow-up decision (August 27, 2026) to use **two** separate, magic-tagged outputs (pool name, pool URL) instead of the single free-form-text output originally described. Section 8 below calls out exactly how this differs from the v1.0 text and why the difference does not reopen the "no consensus change" conclusion.
 
-No code in this repo has been changed yet. The checklist in Section 9 is the follow-up work.
+**Implemented** on the `poolidentity` branch (`MiningJob.ts`, `.env.example`, `MiningJob.spec.ts`), not yet merged to `main` - Ali is running it through further live testing before merging himself. See Section 9 for what remains.
 
 ## 2. Why: Limits of Today's Address-Based Pool Identification
 
@@ -114,14 +114,15 @@ Extend `MiningJob.spec.ts` with cases that:
 
 Both deltas remain attestation-safe and commitment-safe under exactly the same reasoning the v1.0 decision used (single push per output, always-last placement - Section 4 above walks through why). Nothing about the deltas requires revisiting the "no consensus rule change" conclusion. Ali may want to fold this addendum back into the `elektron-net` repo's decided-design document once this is implemented; that is out of scope for this branch and left as an open question (Section 10).
 
-## 9. Checklist (Not Yet Implemented)
+## 9. Checklist
 
-- [ ] Implement `appendPoolIdentityOutputs()` in `MiningJob.ts` per Section 6
-- [ ] Add `POOL_URL` to `.env.example`, documented next to the existing `POOL_IDENTIFIER` entry
-- [ ] Implement the sanitize/length-cap helper (Section 5)
-- [ ] Extend `MiningJob.spec.ts` per Section 7
-- [ ] Update `elektron-net`'s `mining-pool-integration.md` once shipped, to document `vout[3]`/`vout[4]` as part of the coinbase layout
-- [ ] Coordinate with the companion document in `elektron-net-mempool` (`doc-elektron/guideline-pool-identity-detection.md`) so the magic bytes match exactly
+- [x] Implement `appendPoolIdentityOutputs()` in `MiningJob.ts` per Section 6
+- [x] Add `POOL_URL` to `.env.example`, documented next to the existing `POOL_IDENTIFIER` entry
+- [x] Implement the sanitize/length-cap helper (Section 5)
+- [x] Extend `MiningJob.spec.ts` per Section 7 (14/14 tests passing, including the pre-existing regression tests unmodified)
+- [ ] Live-test on regtest/testnet (real `getblocktemplate`, real submitted block) before merging to `main` - Ali is doing this before merge
+- [ ] Update `elektron-net`'s `mining-pool-integration.md` once merged, to document `vout[3]`/`vout[4]` as part of the coinbase layout
+- [ ] Coordinate with the companion document in `elektron-net-mempool` (`doc-elektron/guideline-pool-identity-detection.md`) so the magic bytes match exactly - confirmed identical (`EPNM`/`EPUR`) as of this revision
 
 ## 10. Open Questions
 
