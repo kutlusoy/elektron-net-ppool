@@ -354,6 +354,39 @@ describe('StratumV1Client', () => {
 
     });
 
+    it('should lower difficulty for low-hashrate CPU/GPU miners without switching to HOBBY extranonce1 mode', async () => {
+        (configService.get as jest.Mock).mockImplementation((key: string) => {
+            switch (key) {
+                case 'LOW_HASHRATE_USER_AGENTS':
+                    return 'cpuminer,ccminer,sgminer';
+                case 'DEV_FEE_ADDRESS':
+                    return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
+                case 'POOL_WALLET_ADDRESS':
+                    return 'tb1qumezefzdeqqwn5zfvgdrhxjzc5ylr39uhuxcz4';
+                case 'NETWORK':
+                    return 'bitcoin-testnet';
+            }
+            return null;
+        });
+        jest.spyOn(client as any, 'write').mockImplementation((data) => Promise.resolve(true));
+
+        // "cpuminer-opt/1.0" is refined to "cpuminer" by
+        // SubscriptionMessage.refineUserAgent() before any matching happens.
+        emitMessage(`{"id": 1, "method": "mining.subscribe", "params": ["cpuminer-opt/1.0"]}`);
+        emitMessage(MockRecording1.MINING_AUTHORIZE);
+        await new Promise((r) => setTimeout(r, 100));
+
+        // Regression guard for the bug this test is named after: a
+        // Stratum-compliant CPU/GPU miner must still get an EMPTY
+        // extranonce1 (same as the "should respond to mining.subscribe"
+        // NORMAL-mode case), never the non-empty one HOBBY mode sends --
+        // splicing a non-empty extranonce1 into an otherwise-canonical
+        // coinbase would make the merkle root diverge from the pool's and
+        // break share validation for this miner entirely.
+        expect((client as any).write).toHaveBeenCalledWith(`{"id":1,"error":null,"result":[[["mining.notify","${client.extraNonceAndSessionId}"]],"",0]}\n`);
+        expect((client as any).write).toHaveBeenCalledWith(`{"id":null,"method":"mining.set_difficulty","params":[0.1]}\n`);
+    });
+
     it('should save client', async () => {
         jest.spyOn(client as any, 'write').mockImplementation((data) => Promise.resolve(true));
 

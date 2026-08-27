@@ -420,8 +420,18 @@ export class StratumV1Client {
             // assigned at subscribe time from isHobbyMiner(userAgent).
             const configured = Number(this.configService.get<string>('HOBBY_MINER_DIFFICULTY'));
             this.sessionDifficulty = Number.isFinite(configured) && configured > 0 ? configured : 0.001;
-        } else if (this.clientSubscription.userAgent === 'cpuminer') {
-            this.sessionDifficulty = 0.1;
+        } else if (this.isLowHashrateMiner(this.clientSubscription.userAgent)) {
+            // CPU/GPU software miners (cpuminer, ccminer, sgminer, ... -- see
+            // LOW_HASHRATE_USER_AGENTS default). Unlike the HOBBY branch
+            // above, this must NEVER change isHobbyMinerSession/extranonce1:
+            // these are Stratum-compliant clients that correctly splice a
+            // non-empty extranonce1 into their coinbase, which would make
+            // their merkle root diverge from the pool's canonical one and
+            // break share validation entirely (see the HOBBY vs NORMAL
+            // comment on the mining.subscribe response above). Only the
+            // starting difficulty is lowered here, nothing else.
+            const configured = Number(this.configService.get<string>('LOW_HASHRATE_DIFFICULTY'));
+            this.sessionDifficulty = Number.isFinite(configured) && configured > 0 ? configured : 0.1;
         }
 
         if (this.clientSuggestedDifficulty == null) {
@@ -966,6 +976,24 @@ export class StratumV1Client {
         // userAgent reported in mining.subscribe. Configured via the
         // HOBBY_MINER_USER_AGENTS env var (comma-separated).
         const list = this.configService.get<string>('HOBBY_MINER_USER_AGENTS');
+        if (!list || list.trim() === '' || !userAgent) {
+            return false;
+        }
+        const needles = list.split(',').map(ua => ua.trim().toLowerCase()).filter(ua => ua.length > 0);
+        const haystack = userAgent.toLowerCase();
+        return needles.some(needle => haystack.includes(needle));
+    }
+
+    private isLowHashrateMiner(userAgent: string): boolean {
+        // CPU/GPU software-miner allow-list (cpuminer, ccminer, sgminer, ...).
+        // Deliberately separate from isHobbyMiner()/HOBBY_MINER_USER_AGENTS:
+        // this only ever affects sessionDifficulty (see initStratum()), never
+        // the mining.subscribe extranonce1 -- these miners are Stratum-
+        // compliant and must keep the empty extranonce1 that clean share
+        // validation depends on. Substring-matched case-insensitively against
+        // the userAgent reported in mining.subscribe. Configured via the
+        // LOW_HASHRATE_USER_AGENTS env var (comma-separated).
+        const list = this.configService.get<string>('LOW_HASHRATE_USER_AGENTS');
         if (!list || list.trim() === '' || !userAgent) {
             return false;
         }
