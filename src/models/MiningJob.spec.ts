@@ -119,17 +119,75 @@ describe('MiningJob (miner.py-style header-only)', () => {
             expect(cb.ins[0].witness[0].equals(Buffer.alloc(32, 0))).toBe(true);
         });
 
-        it('should send the full non-witness coinbase as coinb1, with coinb2 empty', () => {
-            // EXTRANONCE_SIZE = 0 on both sides ⇒ worker has nothing to insert.
+        it('should split the non-witness coinbase into coinb1/coinb2 at the scriptSig boundary', () => {
+            // EXTRANONCE_SIZE = 0 on both sides ⇒ worker has nothing to insert,
+            // but coinb2 is NOT empty: standard Stratum V1 clients (ESP-Miner
+            // included) read nSequence/outputs/nLockTime from coinb2 and fail
+            // to parse the job if it is empty.
             const notify = JSON.parse(job.response(jobTemplate));
             const coinb1 = notify.params[2];
             const coinb2 = notify.params[3];
-            expect(coinb2).toBe('');
+            expect(coinb2.length).toBeGreaterThan(0);
 
-            // coinb1 alone must parse as a valid coinbase tx with the right locktime.
-            const reconstructed = bitcoinjs.Transaction.fromHex(coinb1);
+            // coinb1 + coinb2 together must parse as a valid coinbase tx with the right locktime.
+            const reconstructed = bitcoinjs.Transaction.fromHex(coinb1 + coinb2);
             expect(reconstructed.locktime).toBe(jobTemplate.blockData.height - 1);
             expect(reconstructed.ins[0].sequence).toBe(0xfffffffe);
+        });
+
+        it('should reassemble coinb1+coinb2 to exactly the full non-witness coinbase transaction', () => {
+            // Safety property the UTXO attestation depends on: splitting the
+            // wire fields differently must not change a single byte.
+            const notify = JSON.parse(job.response(jobTemplate));
+            const coinb1 = notify.params[2];
+            const coinb2 = notify.params[3];
+            const reassembled = Buffer.concat([Buffer.from(coinb1, 'hex'), Buffer.from(coinb2, 'hex')]);
+
+            const coinbaseTx = (job as any).coinbaseTransaction as bitcoinjs.Transaction;
+            // @ts-ignore — __toBuffer() skips the witness section, matching coinb1/coinb2.
+            const fullTxBuffer: Buffer = coinbaseTx.__toBuffer();
+
+            expect(reassembled.equals(fullTxBuffer)).toBe(true);
+        });
+
+        it('should end coinb1 exactly at the scriptSig boundary and start coinb2 with nSequence', () => {
+            const cb = job.cloneCoinbaseTransaction();
+            const scriptSigLength = cb.ins[0].script.length;
+            // version(4) + input count(1) + prevout hash+index(36) + scriptSig length byte(1) + scriptSig
+            const expectedSplitOffset = 41 + 1 + scriptSigLength;
+
+            const notify = JSON.parse(job.response(jobTemplate));
+            const coinb1: string = notify.params[2];
+            const coinb2: string = notify.params[3];
+
+            expect(coinb1.length / 2).toBe(expectedSplitOffset);
+            // MAX_SEQUENCE_NONFINAL = 0xFFFFFFFE, little-endian on the wire.
+            expect(coinb2.substring(0, 8)).toBe('feffffff');
+        });
+
+        it('should compute buildHeaderBuffer merkle root from the full reassembled coinbase, not coinb1 alone', () => {
+            const versionMask = parseInt('00002000', 16);
+            const nonce = parseInt('ed460d91', 16);
+            const timestamp = parseInt(MockRecording1.TIME, 16);
+
+            const header = job.buildHeaderBuffer(jobTemplate, versionMask, nonce, '', '', timestamp);
+
+            const coinbaseTx = (job as any).coinbaseTransaction as bitcoinjs.Transaction;
+            // @ts-ignore — __toBuffer() skips the witness section, matching coinb1/coinb2.
+            const fullTxBuffer: Buffer = coinbaseTx.__toBuffer();
+            const expectedCoinbaseHash = bitcoinjs.crypto.hash256(fullTxBuffer);
+
+            let root = expectedCoinbaseHash;
+            const bothMerkles = Buffer.alloc(64);
+            bothMerkles.set(root);
+            for (const branch of jobTemplate.merkle_branch) {
+                bothMerkles.set(Buffer.from(branch, 'hex'), 32);
+                root = bitcoinjs.crypto.hash256(bothMerkles);
+                bothMerkles.set(root);
+            }
+            const expectedMerkleRoot = bothMerkles.subarray(0, 32);
+
+            expect(header.subarray(36, 68).equals(expectedMerkleRoot)).toBe(true);
         });
 
         it('should build the same header via buildHeaderBuffer and copyAndUpdateBlock', () => {
