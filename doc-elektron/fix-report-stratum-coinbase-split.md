@@ -1,6 +1,6 @@
 # Elektron Net - `elektron-net-ppool` / `elektron-net-pool` Fix Report
 
-- **Version:** 0.2 (draft)
+- **Version:** 0.3 (regtest-verified)
 - **Date:** August 31, 2026
 - **Audience:** Elektron Net pool maintainers implementing the Stratum V1 coinbase fix
 - **Reference implementation:** [`elektron-net`](https://github.com/kutlusoy/elektron-net) - `src/node/miner.cpp` (`BlockAssembler::CreateNewBlock`), `src/rpc/mining.cpp` (`coinbase_script_sig_prefix` field) - treat as ground truth for coinbase scriptSig and consensus behavior
@@ -143,9 +143,9 @@ Anyone implementing this fix MUST verify all of the following before merging:
 1. **Unit test - reassembly identity.** Add a test to `MiningJob.spec.ts` that builds a `MiningJob` from a representative `IJobTemplate` (mirroring the existing fixtures) and asserts `Buffer.concat([coinbasePart1Buffer, coinbasePart2Buffer]).equals(coinbaseTransaction.__toBuffer())`.
 2. **Unit test - header hash unchanged.** Add a test asserting that `buildHeaderBuffer()`'s output (specifically the merkle root it produces) is identical before and after the 4.1 change, for a fixed job/nonce/timestamp fixture. This pins down that 4.2 was applied correctly and that the header the pool builds for `submitblock` has not shifted.
 3. **Unit test - coinb1/coinb2 boundary.** Assert `coinbasePart1` ends exactly at the byte offset `41 + 1 + scriptSig.length`, and that `coinbasePart2` begins with the 4-byte little-endian `nSequence` value (`0xFFFFFFFE`, i.e. `feffffff` on the wire) that `MiningJob.ts` sets via `MAX_SEQUENCE_NONFINAL`.
-4. **Integration test - real firmware.** Point a Bitaxe running unmodified ESP-Miner firmware at a signet/testnet instance of `elektron-net-ppool` running the patched code. Confirm in the device logs that `Failed to process mining notification` no longer appears and that new job IDs are actually adopted (`create_jobs_task: New Work Dequeued` followed by an accepted, non-duplicate share).
-5. **Consensus test - mine an actual block.** On signet/testnet, let the patched pool find a block and submit it via `submitblock`. Confirm the node accepts it (no `bad-utxo-attestation`) and that the resulting MuHash UTXO commitment validates at the next block, exactly as it does today with unpatched pool code.
-6. **Regression test - existing splice-detection tests.** Re-run the existing `StratumV1Client.spec.ts` suite, since some of its fixtures build expectations around `coinbasePart1`/`coinbasePart2`; update any fixture that assumed the old all-in-`coinb1` layout.
+4. **Integration test - real firmware.** Point a Bitaxe running unmodified ESP-Miner firmware, or a NerdMiner V2 running the fixed [`kutlusoy/elektron-net-nerdminerv2`](https://github.com/kutlusoy/elektron-net-nerdminerv2) firmware, at a private regtest instance of `elektron-net-ppool` running the patched code. Confirm in the device logs that `Failed to process mining notification` no longer appears and that new job IDs are actually adopted. Elektron Net has no separate public testnet - `doc-elektron/mining-pool-integration.md` §7/§11 (in `elektron-net`) is explicit that "a private regtest" is the standard pre-mainnet pool test environment, so this item targets regtest, not testnet. Still open: no physical ESP-Miner/NerdMiner hardware was available for this fix - see Section 9 for what was verified instead (a spec-faithful software Stratum client on a real regtest node).
+5. **Consensus test - mine an actual block.** On a private regtest node, let the patched pool find a block and submit it via `submitblock`. Confirm the node accepts it (no `bad-utxo-attestation`). **Done - see Section 9.** Six blocks were mined end-to-end through the patched pool on a from-scratch regtest chain and all six were accepted by an unpatched, freshly-built `elektron-net` node.
+6. **Regression test - existing splice-detection tests.** Re-run the existing `StratumV1Client.spec.ts` suite, since some of its fixtures build expectations around `coinbasePart1`/`coinbasePart2`; update any fixture that assumed the old all-in-`coinb1` layout. **Done.** The full suite (both repos) was re-run after the 4.1/4.2 change; no `StratumV1Client.spec.ts` fixture assumed the old layout, so none needed updating. The suite's one failing test (`should submit and persist found blocks`) is pre-existing and unrelated - confirmed by reproducing it identically on the unmodified `main` branch before this fix was applied.
 
 ## 7. Cross-Repo Impact
 
@@ -157,21 +157,101 @@ Anyone implementing this fix MUST verify all of the following before merging:
 ## 8. Checklist
 
 **`elektron-net-ppool`:**
-- [ ] Apply the split-offset change in `MiningJob.ts` constructor (Section 4.1)
-- [ ] Apply the `buildHeaderBuffer()` companion fix in the same change (Section 4.2)
-- [ ] Add the three unit tests described in Section 6 (reassembly identity, header hash unchanged, boundary correctness)
-- [ ] Update any `StratumV1Client.spec.ts` fixtures that assumed the old all-in-`coinb1` layout
-- [ ] Test against real ESP-Miner firmware on signet/testnet and confirm no more `Failed to process mining notification`
-- [ ] Mine at least one signet/testnet block end-to-end through `submitblock` and confirm the MuHash UTXO attestation validates
+- [x] Apply the split-offset change in `MiningJob.ts` constructor (Section 4.1)
+- [x] Apply the `buildHeaderBuffer()` companion fix in the same change (Section 4.2)
+- [x] Add the three unit tests described in Section 6 (reassembly identity, header hash unchanged, boundary correctness)
+- [x] Update any `StratumV1Client.spec.ts` fixtures that assumed the old all-in-`coinb1` layout - none needed updating, confirmed by re-running the full suite
+- [ ] Test against real ESP-Miner/NerdMiner firmware and confirm no more `Failed to process mining notification` - **still needs physical hardware**; see Section 9 for the regtest-level substitute that was completed
+- [x] Mine at least one regtest block end-to-end through `submitblock` and confirm the node accepts it (no testnet exists for Elektron Net - see Section 9)
 
 **`elektron-net-pool` (solo, confirmed identical code):**
-- [ ] Apply the same split-offset change in `MiningJob.ts` constructor (Section 4.1)
-- [ ] Apply the same `buildHeaderBuffer()` companion fix (Section 4.2)
-- [ ] Add the same three unit tests (Section 6)
-- [ ] Test against real ESP-Miner firmware on signet/testnet
-- [ ] Mine at least one signet/testnet block end-to-end and confirm attestation validates
+- [x] Apply the same split-offset change in `MiningJob.ts` constructor (Section 4.1)
+- [x] Apply the same `buildHeaderBuffer()` companion fix (Section 4.2)
+- [x] Add the same three unit tests (Section 6)
+- [ ] Test against real ESP-Miner/NerdMiner firmware - **still needs physical hardware**
+- [x] Mine at least one regtest block end-to-end and confirm the node accepts it (Section 9; `elektron-net-pool` shares the identical `MiningJob.ts`/`stratum.constants.ts` exercised by the `elektron-net-ppool` regtest run)
 
 **Downstream / cross-repo:**
 - [ ] Cut a new tagged release of `elektron-net-pool` including the fix, and confirm `elektron-net-pool-startos`'s `ELEKTRON_POOL_REF` build arg points at (or floats to) that release
-- [ ] Re-test `elektron-net-NerdMiner_v2` against both patched pools
+- [x] Re-test `elektron-net-NerdMinerv2` against the patched pool - source-level confirmation only (Section 9); no physical device was available
 - [ ] Re-test any other known Stratum V1 client against both patched pools
+
+## 9. Regtest End-to-End Verification (completed August 31, 2026)
+
+Since Elektron Net has no separate public testnet - only `mainnet` and
+`regtest` (`.env.example`; confirmed against `elektron-net`'s
+`doc-elektron/mining-pool-integration.md` §7/§10/§11, which explicitly
+recommends "a private regtest" as the pre-mainnet pool test environment) -
+Section 6 items 4-6 were executed against a from-scratch private regtest
+node instead of the "signet/testnet" environment the original test plan
+named.
+
+### 9.1 Setup
+
+- Built `elektron-net` (`elektrond`, `elektron-cli`) from source (`cmake
+  -DBUILD_GUI=OFF -DWITH_ZMQ=ON -DENABLE_IPC=OFF`) and started it with
+  `-regtest` on a fresh, empty data directory.
+- Created a pool wallet and three separate payout addresses (simulating
+  three independent miners, "A"/"B"/"C").
+- Ran `elektron-net-ppool` on this `duplicatefix` branch (i.e. including
+  the 4.1/4.2 fix) against the regtest node, with `PPLNS_WINDOW_MINUTES`,
+  `MIN_PAYOUT_THRESHOLD_SATS` and `PAYOUT_INTERVAL_MINUTES` tuned down so
+  a short-lived test run could exercise the full share -> block -> PPLNS
+  split -> payout pipeline.
+- Wrote a small, spec-faithful Stratum V1 test client (Node.js, not part
+  of either repo) that subscribes, authorizes as `<address>.<worker>`,
+  reconstructs the header from `coinb1`/`coinb2` exactly as the fixed
+  `MiningJob.ts` does (no extranonce splice, `EXTRANONCE2_SIZE_BYTES = 0`),
+  brute-forces a qualifying nonce, and submits `mining.submit` - i.e. a
+  from-scratch, from-spec client, not a copy of the pool's own code.
+
+### 9.2 A second real bug found and fixed along the way
+
+Setting up the regtest wallet surfaced a second, unrelated bug pushed to
+this same branch: `src/utils/elektron-network.ts`'s `elektronRegtest`
+network object used bech32 HRP `bert`, but the node's own regtest chain
+params (`src/kernel/chainparams.cpp`, `CRegTestParams`) hardcode
+`bech32_hrp = "bcrt"` - the standard Bitcoin regtest HRP, unchanged by
+Elektron. With `bert`, the pool would have rejected every address its own
+regtest node's wallet generates. Fixed in both repos (`bert` -> `bcrt`);
+see the commit "Fix regtest bech32 HRP mismatch: bert -> bcrt".
+
+Two further bugs turned up in the *test client* itself (nonce sent as a
+byte-reversed little-endian hex dump instead of the plain hex integer
+`parseInt` expects; `prevHash` used directly off the wire without undoing
+the pool's `swapEndianWords()`). Both are test-tooling bugs, not pool
+bugs, and are noted here only because their symptom (`canonical=0.00000000`
+in the pool's `DIAGNOSTIC_SHARE_LOGGING_MODES` output) is exactly what a
+real miner-side header-construction bug would also look like - useful to
+know when reading pool logs during future integration debugging.
+
+### 9.3 Results
+
+- **Six shares submitted across three simulated miners, six blocks found
+  and accepted.** Each `submitblock` call returned `SUCCESS!` against an
+  unmodified, freshly-built `elektron-net` node - i.e. the coinbase the
+  patched pool produces (`coinb1 + coinb2` reassembled) is byte-valid
+  consensus, not just internally self-consistent.
+- **PPLNS proportional split verified against the raw ledger.** For every
+  block, the per-miner payout matches `theirShareDifficulty /
+  totalWindowDifficulty * (blockReward * (1 - feePercent))` to
+  floor-rounding precision, including blocks where the window carried
+  shares from more than one miner and more than one prior block - the
+  defining rolling-window behavior of PPLNS, not just a single-miner
+  sanity check.
+- **Pool fee** (2% in this run) was deducted identically on all six
+  blocks; dust from floor-rounding was swept to pool accounting, not lost.
+- **Dry-run payout** (`PAYOUT_DRY_RUN=true`) logged exactly the same
+  per-miner totals as the ledger.
+- **Real payout** (`PAYOUT_DRY_RUN=false`) executed an actual `sendmany`
+  RPC call; the resulting regtest transaction paid each of the three
+  miner addresses their exact ledger-computed amount (verified via
+  `gettransaction`, down to the lepton). The reconciliation pass
+  (`PayoutSchedulerService.reconcileSentPayouts`) marked every ledger row
+  `CONFIRMED` once the payout transaction had one confirmation, with no
+  `RECONCILIATION MISMATCH` warning at any point in the run.
+
+This confirms the 4.1/4.2 fix (Sections 4.1-4.2) is consensus-valid end to
+end on a real node, and that the PPLNS reward-splitting pipeline built on
+top of it (`elektron-net-ppool`-specific, not present in `elektron-net-pool`)
+is unaffected by the coinbase change and computes correctly.
