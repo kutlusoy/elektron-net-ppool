@@ -18,12 +18,14 @@ export const elektronMainnet: bitcoinjs.networks.Network = {
     wif: 0x80,
 };
 
-// Regtest variant for local Elektron development chains. Bitcoin uses HRP `bcrt`
-// for regtest; Elektron does not document a regtest HRP, so we mirror Bitcoin's
-// convention and prefix with `b` (override via NETWORK=bitcoin-regtest if needed).
+// Regtest variant for local Elektron development chains. The node's own
+// regtest chain params (src/kernel/chainparams.cpp, CRegTestParams) hardcode
+// `bech32_hrp = "bcrt"` -- the standard Bitcoin regtest HRP, unchanged by
+// Elektron. This MUST match that value exactly: any other HRP here makes the
+// pool reject addresses the node's own wallet generates (and vice versa).
 export const elektronRegtest: bitcoinjs.networks.Network = {
     messagePrefix: '\x18Elektron Signed Message:\n',
-    bech32: 'bert',
+    bech32: 'bcrt',
     bip32: {
         public: 0x043587cf,
         private: 0x04358394,
