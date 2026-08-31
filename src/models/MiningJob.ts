@@ -117,15 +117,24 @@ export class MiningJob {
 
         // Stratum wire layout when EXTRANONCE_SIZE = 0 on both sides:
         //
-        //   coinbase = coinb1 + "" + "" + ""
+        //   coinbase = coinb1 + "" + "" + coinb2
         //
-        // i.e. coinb1 = the canonical non-witness coinbase, coinb2 = empty.
-        // This is bit-identical to miner.py's `tx_no_witness` output.
+        // coinb1 ends immediately after scriptSig (version, input count,
+        // prevout, scriptSig length byte, scriptSig itself); coinb2 carries
+        // nSequence, the output count, every output and nLockTime. This is
+        // the split standard Stratum V1 clients (including ESP-Miner) expect
+        // — they read nSequence/outputs/nLockTime from coinb2 unconditionally
+        // and fail to parse the job if coinb2 is empty. With
+        // EXTRANONCE1_SIZE_BYTES = EXTRANONCE2_SIZE_BYTES = 0 nothing is
+        // spliced between coinb1 and coinb2, so coinb1 + coinb2 reassembles
+        // to exactly the same bytes as miner.py's `tx_no_witness` output.
         //@ts-ignore — __toBuffer() skips the witness section.
-        this.coinbasePart1 = this.coinbaseTransaction.__toBuffer().toString('hex');
-        this.coinbasePart2 = '';
-        this.coinbasePart1Buffer = Buffer.from(this.coinbasePart1, 'hex');
-        this.coinbasePart2Buffer = Buffer.alloc(0);
+        const fullCoinbaseBuffer: Buffer = this.coinbaseTransaction.__toBuffer();
+        const coinbaseSplitOffset = 41 + 1 + scriptSig.length; // version(4)+incount(1)+prevout(36)+scriptSigLenByte(1)+scriptSig
+        this.coinbasePart1 = fullCoinbaseBuffer.subarray(0, coinbaseSplitOffset).toString('hex');
+        this.coinbasePart2 = fullCoinbaseBuffer.subarray(coinbaseSplitOffset).toString('hex');
+        this.coinbasePart1Buffer = fullCoinbaseBuffer.subarray(0, coinbaseSplitOffset);
+        this.coinbasePart2Buffer = fullCoinbaseBuffer.subarray(coinbaseSplitOffset);
     }
 
     public cloneCoinbaseTransaction(): bitcoinjs.Transaction {
@@ -134,8 +143,11 @@ export class MiningJob {
 
     public buildHeaderBuffer(jobTemplate: IJobTemplate, versionMask: number, nonce: number, _extraNonce: string, _extraNonce2: string, timestamp: number): Buffer {
         // With EXTRANONCE_SIZE = 0 the worker can't change the coinbase, so the
-        // hash is precisely the precomputed coinbasePart1Buffer (=tx_no_witness).
-        const coinbaseHash = bitcoinjs.crypto.hash256(this.coinbasePart1Buffer);
+        // hash is precisely the reassembled coinbasePart1Buffer + coinbasePart2Buffer
+        // (=tx_no_witness). coinbasePart1Buffer alone is only the pre-scriptSig-end
+        // fragment since the coinb1/coinb2 split moved (see constructor) — hashing
+        // it alone would hash a truncated, invalid coinbase transaction.
+        const coinbaseHash = bitcoinjs.crypto.hash256(Buffer.concat([this.coinbasePart1Buffer, this.coinbasePart2Buffer]));
         const merkleRoot = this.calculateMerkleRootHash(coinbaseHash, this.merkleBranchBuffers);
 
         let version = jobTemplate.block.version;
