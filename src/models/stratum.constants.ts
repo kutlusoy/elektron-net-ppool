@@ -14,11 +14,15 @@
 //
 //   * EXTRANONCE1_SIZE_BYTES = 0  → nothing is spliced by the pool
 //   * EXTRANONCE2_SIZE_BYTES = 0  → nothing is iterated by the worker
-//   * coinb1 = the full non-witness coinbase serialization
-//   * coinb2 = "" (empty)
+//   * coinb1 = non-witness coinbase up to and including scriptSig
+//   * coinb2 = nSequence, output count, outputs, nLockTime
 //
-// With both sizes 0, `coinb1 + extranonce1 + extranonce2 + coinb2`
-// degenerates to `coinb1` — exactly the bytes miner.py emits.
+// coinb1/coinb2 are split at the scriptSig boundary (not at the end of
+// the whole transaction) because standard Stratum V1 clients, including
+// ESP-Miner, always read nSequence/outputs/nLockTime from coinb2 and fail
+// to parse the job if coinb2 is empty. With both extranonce sizes 0,
+// `coinb1 + extranonce1 + extranonce2 + coinb2` degenerates to
+// `coinb1 + coinb2` — exactly the bytes miner.py emits.
 export const EXTRANONCE1_SIZE_BYTES = 0;
 export const EXTRANONCE2_SIZE_BYTES = 0;
 export const TOTAL_EXTRANONCE_SIZE_BYTES = EXTRANONCE1_SIZE_BYTES + EXTRANONCE2_SIZE_BYTES;
