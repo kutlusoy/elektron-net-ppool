@@ -129,6 +129,7 @@ export class StratumV1Client {
         if (this.destroyPromise) {
             return this.destroyPromise;
         }
+
         this.connectionClosed = true;
 
         const work = this.backgroundWork.splice(0);
@@ -151,6 +152,7 @@ export class StratumV1Client {
                 }
             }
         })();
+
         return this.destroyPromise;
     }
 
@@ -1166,6 +1168,7 @@ export class StratumV1Client {
 
     private closeSocket() {
         this.connectionClosed = true;
+        void this.destroy();
         if (!this.socket.destroyed) {
             this.socket.destroy();
         }
