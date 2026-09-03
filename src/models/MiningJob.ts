@@ -50,6 +50,14 @@ export class MiningJob {
     public networkDifficulty: number;
     public creation: number;
 
+    // Frozen at construction time. jobTemplate.block.version can belong to a
+    // shared/cached template object that StratumV1Client's 500ms local work
+    // refresh (BIP320 pool-side version-bit rotation) mutates in place for
+    // later jobs — reading jobTemplate.block.version again during share
+    // validation or block submission would silently pick up a rotation
+    // state that was never sent to the miner for *this* job.
+    private jobVersion: number;
+
     constructor(
         configService: ConfigService,
         private network: bitcoinjs.networks.Network,
@@ -59,6 +67,7 @@ export class MiningJob {
     ) {
 
         this.creation = new Date().getTime();
+        this.jobVersion = jobTemplate.block.version;
         this.jobTemplateId = jobTemplate.blockData.id;
         this.merkleBranchBuffers = jobTemplate.merkle_branch.map(branch => Buffer.from(branch, 'hex'));
 
@@ -150,7 +159,7 @@ export class MiningJob {
         const coinbaseHash = bitcoinjs.crypto.hash256(Buffer.concat([this.coinbasePart1Buffer, this.coinbasePart2Buffer]));
         const merkleRoot = this.calculateMerkleRootHash(coinbaseHash, this.merkleBranchBuffers);
 
-        let version = jobTemplate.block.version;
+        let version = this.jobVersion;
         if (versionMask !== undefined && versionMask != 0) {
             version = version ^ versionMask;
         }
@@ -239,7 +248,7 @@ export class MiningJob {
         const coinbaseHash = bitcoinjs.crypto.hash256(coinbaseSerialized);
         const merkleRoot = this.calculateMerkleRootHash(coinbaseHash, this.merkleBranchBuffers);
 
-        let version = jobTemplate.block.version;
+        let version = this.jobVersion;
         if (versionMask !== undefined && versionMask != 0) {
             version = version ^ versionMask;
         }
@@ -258,6 +267,7 @@ export class MiningJob {
     public copyAndUpdateBlock(jobTemplate: IJobTemplate, versionMask: number, nonce: number, _extraNonce: string, _extraNonce2: string, timestamp: number): bitcoinjs.Block {
 
         const testBlock = Object.assign(new bitcoinjs.Block(), jobTemplate.block);
+        testBlock.version = this.jobVersion;
         testBlock.transactions = jobTemplate.block.transactions.map(tx => {
             return Object.assign(new bitcoinjs.Transaction(), tx);
         });
@@ -343,7 +353,7 @@ export class MiningJob {
                 this.coinbasePart1,
                 this.coinbasePart2,
                 jobTemplate.merkle_branch,
-                jobTemplate.block.version.toString(16),
+                this.jobVersion.toString(16),
                 jobTemplate.block.bits.toString(16),
                 jobTemplate.block.timestamp.toString(16),
                 jobTemplate.blockData.clearJobs
