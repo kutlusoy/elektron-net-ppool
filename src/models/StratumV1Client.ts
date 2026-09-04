@@ -36,6 +36,15 @@ const TRUE_DIFF_ONE = 2.695953529101131e67;
 const BLOCKED_USER_AGENT_LOG_INTERVAL_MS = 60 * 1000;
 const VALIDATION_ERROR_LOG_INTERVAL_MS = 60 * 1000;
 
+// Bits 13-16 of the block version (0x0001e000), reserved from the miner's
+// BIP320 version-rolling range (see ConfigurationMessage: miner mask is
+// 1ffe0000, i.e. the standard 1fffe000 minus these bits). The pool cycles
+// this nibble on every local work refresh (sendNewMiningJob), giving each
+// mining.notify a distinct header search space without an extra
+// getblocktemplate call. Disjoint from the miner-usable range, so it can
+// never collide with version bits an ASIC sets itself.
+const ELEKTRON_POOL_VERSION_BITS_MASK = 0x0001e000;
+
 export class StratumV1Client {
     private static blockedUserAgentLogState = new Map<string, { nextLogAt: number, suppressed: number }>();
     private static validationErrorLogState = new Map<string, { nextLogAt: number, suppressed: number, sample: string }>();
@@ -64,6 +73,10 @@ export class StratumV1Client {
     private buffer: string = '';
     private connectionClosed = false;
     private lastSentMiningJobTimestamp: number = null;
+    private destroyPromise: Promise<void> | null = null;
+    private elektronPoolVersionCounter = 0;
+    private currentJobTemplate: IJobTemplate | null = null;
+    private lastLocalWorkSentAt = 0;
 
     private miningSubmissionHashes = new Set<string>()
 
@@ -102,22 +115,52 @@ export class StratumV1Client {
             })();
         });
 
+        this.socket.once('end', () => {
+            this.connectionClosed = true;
+        });
+        this.socket.once('close', () => {
+            this.connectionClosed = true;
+            void this.destroy();
+        });
 
     }
 
-    public async destroy() {
-
-        if (this.extraNonceAndSessionId) {
-            await this.clientService.delete(this.extraNonceAndSessionId);
+    public destroy(): Promise<void> {
+        if (this.destroyPromise) {
+            return this.destroyPromise;
         }
+
+        this.connectionClosed = true;
+
+        const work = this.backgroundWork.splice(0);
+        work.forEach(timer => {
+            clearInterval(timer);
+        });
 
         if (this.stratumSubscription != null) {
             this.stratumSubscription.unsubscribe();
         }
 
-        this.backgroundWork.forEach(work => {
-            clearInterval(work);
-        });
+        this.currentJobTemplate = null;
+
+        this.destroyPromise = (async () => {
+            if (this.extraNonceAndSessionId) {
+                try {
+                    await this.clientService.delete(this.extraNonceAndSessionId);
+                } catch (e) {
+                    console.error(`Error cleaning client ${this.extraNonceAndSessionId}: ${e?.message ?? e}`);
+                }
+            }
+        })();
+
+        return this.destroyPromise;
+    }
+
+    private isSocketClosed(): boolean {
+        return this.connectionClosed
+            || this.socket.destroyed
+            || this.socket.writableEnded
+            || !this.socket.writable;
     }
 
     private getRandomHexString() {
@@ -356,7 +399,7 @@ export class StratumV1Client {
                             const rawParams = (parsedMessage as { params?: unknown })?.params;
                             console.log(`  [diag] raw mining.submit params: ${JSON.stringify(rawParams)}`);
                         } catch {
-                            // ignore — diagnostic only
+                            // ignore - diagnostic only
                         }
                     }
                     const result = await this.handleMiningSubmission(miningSubmitMessage);
@@ -459,12 +502,17 @@ export class StratumV1Client {
         // Tunable cadences for vardiff re-evaluation and template refresh.
         // High-end ASICs (Bitaxe Gamma, Antminer, Whatsminer) benefit from a
         // shorter template refresh because they exhaust the (nonce, version)
-        // search space inside a single ntime window — a faster tick keeps the
+        // search space inside a single ntime window - a faster tick keeps the
         // ntime advancing so they don't waste hashes on stale headers. Both
         // values are env-overridable and clamped to sane minimums so a typo
         // can't drop the pool into a tight spin loop.
         const difficultyCheckMs = this.getTunedIntervalMs('DIFFICULTY_CHECK_INTERVAL_MS', 60 * 1000, 5 * 1000);
         const jobRefreshMs = this.getTunedIntervalMs('JOB_REFRESH_INTERVAL_MS', 30 * 1000, 1 * 1000);
+        // Cheap, RPC-free local work refresh: rotates the pool-reserved BIP320
+        // version bits (ELEKTRON_POOL_VERSION_BITS_MASK) on the already-cached
+        // template and pushes a new mining.notify -- no getblocktemplate call,
+        // so this scales with connected miners without extra node RPC load.
+        const workRefreshMs = this.getTunedIntervalMs('WORK_REFRESH_INTERVAL_MS', 1000, 500);
 
         this.backgroundWork.push(
             setInterval(async () => {
@@ -482,9 +530,22 @@ export class StratumV1Client {
             }, jobRefreshMs)
         );
 
+        this.backgroundWork.push(
+            setInterval(async () => {
+                try {
+                    await this.refreshLocalMiningWork();
+                } catch (e) {
+                    console.error(`Local work refresh failed for ${this.clientAuthorization?.address}: ${e?.message ?? e}`);
+                }
+            }, workRefreshMs)
+        );
+
     }
 
     private async refreshMiningJob() {
+        if (this.isSocketClosed()) {
+            return;
+        }
         if (!this.clientAuthorization?.address) {
             return;
         }
@@ -492,7 +553,34 @@ export class StratumV1Client {
         if (jobTemplate.blockData.clearJobs) {
             this.miningSubmissionHashes.clear();
         }
+        this.currentJobTemplate = jobTemplate;
         await this.sendNewMiningJob(jobTemplate);
+    }
+
+    // Between real getblocktemplate refreshes, rotate the pool-reserved BIP320
+    // version bits on the already-fetched template and push a fresh
+    // mining.notify. This is what lets WORK_REFRESH_INTERVAL_MS run at a much
+    // tighter cadence (default 500ms) than JOB_REFRESH_INTERVAL_MS without
+    // adding any RPC load: no getblocktemplate call is made here.
+    private async refreshLocalMiningWork() {
+        if (this.isSocketClosed()) {
+            return;
+        }
+        if (!this.currentJobTemplate) {
+            return;
+        }
+        const nowMs = Date.now();
+        if (nowMs - this.lastLocalWorkSentAt < 350) {
+            return;
+        }
+        const baseTemplate = this.currentJobTemplate;
+        const timestamp = Math.max(baseTemplate.block.timestamp, Math.floor(nowMs / 1000));
+        const localTemplate: IJobTemplate = {
+            ...baseTemplate,
+            block: Object.assign(new bitcoinjs.Block(), baseTemplate.block, { timestamp }),
+            blockData: { ...baseTemplate.blockData, clearJobs: false },
+        };
+        await this.sendNewMiningJob(localTemplate);
     }
 
     private getPoolWalletAddress(): string {
@@ -511,6 +599,29 @@ export class StratumV1Client {
     }
 
     private async sendNewMiningJob(jobTemplate: IJobTemplate) {
+
+        if (this.isSocketClosed()) {
+            return;
+        }
+
+        // BIP320 pool-side work rotation: cycle the pool-reserved version bits
+        // (ELEKTRON_POOL_VERSION_BITS_MASK) on every job so each mining.notify
+        // gets a distinct header search space. Reset the counter on a real
+        // clearJobs refresh (new block / new template) so the sequence restarts
+        // predictably; local-refresh jobs (clearJobs=false) keep incrementing it.
+        if (jobTemplate.blockData.clearJobs) {
+            this.elektronPoolVersionCounter = 0;
+        }
+        const rotationState = this.elektronPoolVersionCounter++ & 0x0f;
+        const poolVersionBits = (rotationState << 13) >>> 0;
+        const jobVersion = (
+            (jobTemplate.block.version & ~ELEKTRON_POOL_VERSION_BITS_MASK)
+            | (poolVersionBits & ELEKTRON_POOL_VERSION_BITS_MASK)
+        ) >>> 0;
+        const versionedJobTemplate: IJobTemplate = {
+            ...jobTemplate,
+            block: Object.assign(new bitcoinjs.Block(), jobTemplate.block, { version: jobVersion }),
+        };
 
         // Elektron Net: the UTXO attestation hash committed to in the template's
         // coinbase is computed against a single payout output. Multiple outputs
@@ -549,17 +660,18 @@ export class StratumV1Client {
             network,
             this.stratumV1JobsService.getNextId(),
             payoutInformation,
-            jobTemplate
+            versionedJobTemplate
         );
 
         this.stratumV1JobsService.addJob(job);
 
 
-        const success = await this.write(job.response(jobTemplate));
+        const success = await this.write(job.response(versionedJobTemplate));
         if (!success) {
             return;
         }
         this.lastSentMiningJobTimestamp = jobTemplate.block.timestamp;
+        this.lastLocalWorkSentAt = Date.now();
 
 
         //console.log(`Sent new job to ${this.clientAuthorization.worker}.${this.extraNonceAndSessionId}. (clearJobs: ${jobTemplate.blockData.clearJobs}, fee?: ${!this.noFee})`)
@@ -666,14 +778,14 @@ export class StratumV1Client {
         // hypothesis about what the firmware splices into the coinbase, and
         // we log the resulting difficulty side by side. If exactly one
         // hypothesis consistently produces diff >= required while canonical
-        // stays ~0, we've identified the firmware's mangling — and can then
+        // stays ~0, we've identified the firmware's mangling - and can then
         // decide whether it's pool-fixable or needs a firmware patch.
         //
         // Env value is a comma-separated list of mode codes. Empty or unset
         // disables all diagnostic output. Special value `all` enables every
         // mode. Available modes:
         //
-        //   canonical            no splice (== the value used for share OK check)
+        //   canonical            no splice (== the value used for the share OK check)
         //   suffix-en1           canonical || extranonce1
         //   suffix-en1-en2       canonical || extranonce1 || extranonce2  (classic Stratum)
         //   suffix-zero4         canonical || 0x00000000                  (hardcoded extranonce)
@@ -758,7 +870,7 @@ export class StratumV1Client {
                 // already in the window when RewardCalculatorService reads it.
                 // Recording it afterwards would systematically exclude every
                 // winning share from its own block's reward split (see concept
-                // doc §5.1 — independent of the coarser StratumV1ClientStatistics
+                // doc §5.1 - independent of the coarser StratumV1ClientStatistics
                 // buckets, which stay as-is for the dashboard/vardiff).
                 await this.pplnsShareLogService.record(this.clientAuthorization.address, submissionDifficulty, jobTemplate.blockData.height);
             } catch (e) {
@@ -781,7 +893,7 @@ export class StratumV1Client {
                 // (null RPC response per `submitblock`). Any other value is the
                 // node's rejection reason (e.g. `bad-utxo-attestation`). Only
                 // persist accepted blocks in the Found Blocks table and reset
-                // best-difficulty counters on a real win — otherwise rejected
+                // best-difficulty counters on a real win - otherwise rejected
                 // attempts would pollute the dashboard.
                 if (result === 'SUCCESS!') {
                     await this.blocksService.save({
@@ -799,7 +911,7 @@ export class StratumV1Client {
                         // PPLNS: split the actual coinbase value (subsidy + fees) among
                         // everyone who contributed shares in the PPLNS window, minus the
                         // pool fee. minerAddress above is who found it (for statistics
-                        // only) — the reward itself is shared, not sent to this miner alone.
+                        // only) - the reward itself is shared, not sent to this miner alone.
                         await this.rewardCalculatorService.processBlockFound(jobTemplate.blockData.height, jobTemplate.blockData.coinbasevalue);
                     } catch (e) {
                         console.error(`PPLNS reward calculation failed for block ${jobTemplate.blockData.height}: ${e?.message ?? e}`);
@@ -894,7 +1006,9 @@ export class StratumV1Client {
 
             await this.socket.write(data);
 
-            const jobTemplate = await this.stratumV1JobsService.buildTemplateFor(this.getPoolWalletAddress());
+            const jobTemplate = this.currentJobTemplate
+                ?? await this.stratumV1JobsService.buildTemplateFor(this.getPoolWalletAddress());
+            this.currentJobTemplate = jobTemplate;
             const nextTimestamp = Math.max(
                 jobTemplate.block.timestamp,
                 Math.floor(Date.now() / 1000),
@@ -950,7 +1064,7 @@ export class StratumV1Client {
         //   ""         -> {} (logging off)
         //   "all"      -> every supported mode
         //   "a,b,c"    -> the named modes (whitespace and case insensitive)
-        // Unknown tokens are silently dropped — the StartOS multiselect is
+        // Unknown tokens are silently dropped - the StartOS multiselect is
         // the source of truth for valid mode names.
         const ALL_MODES = [
             'canonical',
@@ -1082,42 +1196,41 @@ export class StratumV1Client {
 
     private closeSocket() {
         this.connectionClosed = true;
+        void this.destroy();
         if (!this.socket.destroyed) {
             this.socket.destroy();
         }
     }
 
     private async write(message: string): Promise<boolean> {
+        if (this.isSocketClosed()) {
+            return false;
+        }
         try {
-            if (!this.socket.destroyed && !this.socket.writableEnded) {
-
-                await new Promise((resolve, reject) => {
-                    this.socket.write(message, (error) => {
-                        if (error) {
-                            reject(error);
-                        } else {
-                            resolve(true);
-                        }
-                    });
-                });
-
-                return true;
-            } else {
-                console.error(`Error: Cannot write to closed or ended socket. ${this.extraNonceAndSessionId} ${message}`);
-                this.destroy();
-                if (!this.socket.destroyed) {
-                    this.socket.destroy();
+            await new Promise<void>((resolve, reject) => {
+                if (this.isSocketClosed()) {
+                    resolve();
+                    return;
                 }
-                return false;
-            }
+                this.socket.write(message, (error) => {
+                    if (error) {
+                        reject(error);
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+
+            return !this.isSocketClosed();
         } catch (error) {
-            this.destroy();
-            if (!this.socket.writableEnded) {
-                await this.socket.end();
-            } else if (!this.socket.destroyed) {
+            const expectedDisconnect = this.isSocketClosed();
+            await this.destroy();
+            if (!this.socket.destroyed) {
                 this.socket.destroy();
             }
-            console.error(`Error occurred while writing to socket: ${this.extraNonceAndSessionId}`, error);
+            if (!expectedDisconnect) {
+                console.error(`Error occurred while writing to socket: ${this.extraNonceAndSessionId}`, error);
+            }
             return false;
         }
     }

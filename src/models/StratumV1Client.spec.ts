@@ -28,7 +28,6 @@ import { MiningSubmitMessage } from './stratum-messages/MiningSubmitMessage';
 
 
 
-
 jest.mock('../services/bitcoin-rpc.service')
 
 jest.mock('./validators/bitcoin-address.validator', () => ({
@@ -156,7 +155,9 @@ describe('StratumV1Client', () => {
         // });
 
         jest.spyOn(socket, 'on').mockImplementation((event: string, listener: (...args: any[]) => void) => {
-            socketEmitter = listener;
+            if (event === 'data') {
+                socketEmitter = listener;
+            }
             return socket;
         });
 
@@ -285,7 +286,9 @@ describe('StratumV1Client', () => {
 
         const secondSocket = new Socket();
         jest.spyOn(secondSocket, 'on').mockImplementation((event: string, listener: (...args: any[]) => void) => {
-            socketEmitter = listener;
+            if (event === 'data') {
+                socketEmitter = listener;
+            }
             return secondSocket;
         });
         secondSocket.end = jest.fn();
@@ -321,7 +324,7 @@ describe('StratumV1Client', () => {
         expect(socket.on).toHaveBeenCalled();
         emitMessage(MockRecording1.MINING_CONFIGURE);
         await new Promise((r) => setTimeout(r, 1));
-        expect(socket.write).toHaveBeenCalledWith(`{"id":2,"error":null,"result":{"version-rolling":true,"version-rolling.mask":"1fffe000"}}\n`, expect.any(Function));
+        expect(socket.write).toHaveBeenCalledWith(`{"id":2,"error":null,"result":{"version-rolling":true,"version-rolling.mask":"1ffe0000"}}\n`, expect.any(Function));
     });
 
     it('should respond to mining.authorize', async () => {
@@ -602,7 +605,9 @@ describe('StratumV1Client', () => {
 
         const secondSocket = new Socket();
         jest.spyOn(secondSocket, 'on').mockImplementation((event: string, listener: (...args: any[]) => void) => {
-            socketEmitter = listener;
+            if (event === 'data') {
+                socketEmitter = listener;
+            }
             return secondSocket;
         });
         secondSocket.end = jest.fn();

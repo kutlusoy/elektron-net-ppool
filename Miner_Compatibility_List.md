@@ -29,9 +29,13 @@ they do not earn rewards.
 ## Legend
 
 - ✅ **NORMAL** — full compatibility, shares validate, blocks count.
-- ⚠️ **HOBBY** — connection stays up, but shares cannot validate because
-  the firmware splices into the coinbase regardless of what the pool
-  advertises. Connect-only, no rewards. Listed for transparency.
+- ⚠️ **HOBBY** — the pool's accommodation mode: non-empty `extranonce1`
+  (some firmwares abort on empty) plus a low starting difficulty for
+  weak ESP32-class hashrate. By itself this does NOT mean "no rewards" —
+  whether shares actually validate depends on whether the firmware also
+  splices bytes into the coinbase (see per-miner notes below). Where a
+  row says "rewards possible", shares validate normally; otherwise the
+  firmware's splice still breaks the merkle root and shares cannot count.
 - ❌ **Incompatible** — refuses to connect, or connects but the pool
   cannot handle its protocol expectations.
 
@@ -62,10 +66,10 @@ node — not socket capacity — is the bottleneck. See README §
 | Miner | Default firmware | Status | Reason / source |
 |---|---|---|---|
 | **Bitaxe Ultra / Supra / Gamma / Cobo** | ESP-Miner (open source) | ✅ NORMAL | `bitaxeorg/ESP-Miner` → `components/stratum/stratum_api.c` parses `extranonce_2_len` from the subscribe response and clamps it (max 32) — explicitly accepts `0`. `main/tasks/create_jobs_task.c` `generate_work()` honours `extranonce_2_len` correctly. Removed from `HOBBY_MINER_USER_AGENTS` default in commit `f41f151` precisely for this reason. |
-| **NerdMiner v1** (original) | NerdMiner v1.x firmware | ⚠️ HOBBY | Same `calculateMiningData` codepath as v2; assumed equally affected pending verification. |
-| **NerdMiner_v2** (BitMaker-hub) | NerdMiner v2.x firmware | ⚠️ HOBBY | `BitMaker-hub/NerdMiner_v2` → `src/utils.cpp` `calculateMiningData()` (~lines 216–226) hardcodes `mWorker.extranonce2 = "00000001"` (4 bytes) whenever `extranonce2_size ∉ {2,4,8}` — including our case of size 0. The 4-byte splice changes the coinbase txid → UTXO attestation fails. Firmware also rejects empty `extranonce1` (`stratum.cpp:78-83`), so the pool sends a non-empty session tag in HOBBY mode to keep the TCP session alive for diagnostics. **No rewards possible** until upstream firmware is fixed. |
-| **NerdAxe** | NerdAxe firmware (NerdMiner_v2 fork) | ⚠️ HOBBY | Inherits the `calculateMiningData` codepath from NerdMiner_v2; identical incompatibility assumed. |
-| **NerdQAxe / NerdQAxe+** | NerdQAxe firmware (NerdMiner_v2 fork) | ⚠️ HOBBY | Same lineage. |
+| **NerdMiner v1** (original) | NerdMiner v1.x firmware | ⚠️ HOBBY | Same `calculateMiningData` codepath as v2; assumed equally affected pending verification. Not confirmed fixed — verify against its own firmware source before assuming the NerdMiner_v2 fix below applies. |
+| **NerdMiner_v2** (kutlusoy fork) | [`kutlusoy/elektron-net-nerdminerv2`](https://github.com/kutlusoy/elektron-net-nerdminerv2), main @ `4a2696e` | ⚠️ HOBBY, **rewards possible** | Fixed upstream of `BitMaker-hub/NerdMiner_v2`: `src/utils.cpp` `calculateMiningData()` (~line 216) now sets `mWorker.extranonce2 = ""` when `extranonce2_size == 0` (previously fell into the `else` branch and hardcoded `"00000001"`, a 4-byte splice that broke the UTXO attestation), and builds the coinbase as `coinb1 + coinb2` directly (~line 234-238) — exactly the split this pool now produces (see `doc-elektron/fix-report-stratum-coinbase-split.md`). **Requires this pool's coinb1/coinb2 scriptSig-boundary fix** (branch `duplicatefix`, not yet in `main`) — against unpatched `main`, coinb2 is still empty and shares will not validate even with this firmware. Firmware still rejects empty `extranonce1` (`stratum.cpp:78-84`, unchanged), so it stays in the `HOBBY_MINER_USER_AGENTS` allow-list for the non-empty session tag — this no longer means "no rewards", only "needs the extranonce1 + low-diff accommodation". `HOBBY_MINER_DIFFICULTY` lowered to `0.0001` so shares are found before the dead-client timeout on ESP32-class hashrate. Default build sends userAgent `NerdMinerV2/<version>` (matches the allow-list); a `-DHAN` build variant sends `HAN_SOLOminer/<version>` instead, which does **not** match — add that substring too if this build flag is used. |
+| **NerdAxe** | NerdAxe firmware (NerdMiner_v2 fork) | ⚠️ HOBBY | Inherits the `calculateMiningData` codepath from upstream NerdMiner_v2; not confirmed to include the fix above — verify its firmware source before assuming rewards are possible. |
+| **NerdQAxe / NerdQAxe+** | NerdQAxe firmware (NerdMiner_v2 fork) | ⚠️ HOBBY | Same lineage; not confirmed fixed. |
 | **FutureBit Apollo BTC / Apollo II** | Apollo stock (cgminer-based) | ✅ NORMAL | cgminer derivative; respects pool extranonce sizing. |
 | **Compass Bitaxe variants** | ESP-Miner | ✅ NORMAL | Same firmware as Bitaxe. |
 | Antminer Home (S1 Hydro) | Bitmain stock | ✅ NORMAL | cgminer-derived. |
@@ -96,15 +100,22 @@ any listed substring. Current default (`.env.example`):
 
 ```
 HOBBY_MINER_USER_AGENTS=NerdMiner,NerdminerV2,nerdminer,NerdAxe,NerdQAxe
-HOBBY_MINER_DIFFICULTY=0.001
+HOBBY_MINER_DIFFICULTY=0.0001
 ```
 
 HOBBY sessions get:
 - `extranonce1 = <session id>` (non-empty) in the subscribe response so
   the firmware does not abort on empty extranonce1.
-- Starting difficulty `HOBBY_MINER_DIFFICULTY` (default `0.001`) so an
+- Starting difficulty `HOBBY_MINER_DIFFICULTY` (default `0.0001`) so an
   ESP32-class device actually finds a share before the dead-client
   timeout fires.
+
+Being tagged HOBBY does not by itself block rewards — it only supplies
+the extranonce1/difficulty accommodation above. Whether shares actually
+validate depends on the firmware's coinbase handling; see the per-miner
+notes in the tables above (currently only the `kutlusoy/elektron-net-nerdminerv2`
+fork is confirmed to validate, and only once this pool's coinb1/coinb2
+scriptSig-boundary fix is in place).
 
 NORMAL sessions get:
 - `extranonce1 = ""` in the subscribe response (canonical, miner.py-equivalent).
