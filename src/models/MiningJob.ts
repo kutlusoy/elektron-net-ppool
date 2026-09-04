@@ -32,6 +32,16 @@ import { ConfigService } from '@nestjs/config';
 
 const MAX_BLOCK_WEIGHT = 4000000;
 
+// Pool identity outputs (doc-elektron/guideline-pool-identity-op-return.md):
+// two informational, single-push OP_RETURN coinbase outputs, always appended
+// last, each tagged with its own 4-byte magic so elektron-net-mempool can
+// find them by content instead of by position. Neither magic starts with
+// 0xaa (the witness-commitment magic, 0xaa21a9ed), so a last-match scan for
+// the commitment can never pick these up instead of the real one.
+const POOL_IDENTITY_MAGIC_NAME = Buffer.from('EPNM', 'ascii'); // 0x45504e4d
+const POOL_IDENTITY_MAGIC_URL = Buffer.from('EPUR', 'ascii'); // 0x45505552
+const POOL_IDENTITY_MAX_TEXT_BYTES = 64;
+
 interface AddressObject {
     address: string;
     percent: number;
@@ -110,6 +120,12 @@ export class MiningJob {
                 0,
             );
         }
+
+        // Pool identity (name, URL): always appended after the required
+        // outputs / witness-commitment fallback above, i.e. always last, so
+        // the node's first-match attestation scan and last-match commitment
+        // scan are unaffected. See doc-elektron/guideline-pool-identity-op-return.md.
+        this.appendPoolIdentityOutputs(configService);
 
         if ((this.coinbaseTransaction.weight() + jobTemplate.block.weight()) > MAX_BLOCK_WEIGHT) {
             throw new Error('Block weight exceeds the maximum allowed weight');
@@ -318,6 +334,55 @@ export class MiningJob {
             console.warn(`Invalid payout address ${address}: ${e.message ?? e}`);
             return Buffer.alloc(0);
         }
+    }
+
+    // Appends the pool-name and pool-URL identity outputs, each independently
+    // optional. POOL_IDENTIFIER already exists (off-chain, external share
+    // submission) and is reused here as the on-chain pool name; POOL_URL is
+    // new. Either is skipped entirely (no placeholder output) if unset, so a
+    // pool that configures neither gets byte-for-byte today's coinbase.
+    private appendPoolIdentityOutputs(configService: ConfigService): void {
+        const poolName = configService.get<string>('POOL_IDENTIFIER');
+        const poolUrl = configService.get<string>('POOL_URL');
+
+        this.appendPoolIdentityOutput(poolName, POOL_IDENTITY_MAGIC_NAME);
+        this.appendPoolIdentityOutput(poolUrl, POOL_IDENTITY_MAGIC_URL);
+    }
+
+    private appendPoolIdentityOutput(value: string | undefined | null, magic: Buffer): void {
+        if (!value) {
+            return;
+        }
+
+        const text = this.sanitizePoolIdentityText(value, POOL_IDENTITY_MAX_TEXT_BYTES);
+        if (text.length === 0) {
+            return;
+        }
+
+        // Single data push (magic || text) — never two pushes — so this can
+        // never be mistaken for the two-push <height><32 bytes> UTXO
+        // attestation shape, regardless of byte content.
+        const script = bitcoinjs.script.compile([bitcoinjs.opcodes.OP_RETURN, Buffer.concat([magic, text])]);
+        this.coinbaseTransaction.addOutput(script, 0);
+    }
+
+    // Strips bytes that do not round-trip as valid UTF-8 (e.g. a lone
+    // surrogate from malformed operator input) and truncates on a code-point
+    // boundary so a multi-byte character is never split.
+    private sanitizePoolIdentityText(raw: string, maxBytes: number): Buffer {
+        const cleaned = new TextDecoder('utf-8', { fatal: false })
+            .decode(Buffer.from(raw, 'utf8'))
+            .replace(/�/g, '');
+
+        let result = Buffer.alloc(0);
+        for (const codePoint of cleaned) {
+            const next = Buffer.concat([result, Buffer.from(codePoint, 'utf8')]);
+            if (next.length > maxBytes) {
+                break;
+            }
+            result = next;
+        }
+        return result;
     }
 
     public response(jobTemplate: IJobTemplate): string {
