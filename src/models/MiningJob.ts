@@ -4,9 +4,9 @@
 //
 //   height       = template['height']                  (jobTemplate.blockData.height)
 //   prefix_hex   = template['coinbase_script_sig_prefix']
-//   script_sig   = bytes.fromhex(prefix_hex)            — NOTHING APPENDED
+//   script_sig   = bytes.fromhex(prefix_hex)            - NOTHING APPENDED
 //   prevout      = bytes(32) + b'\xff\xff\xff\xff'
-//   nSequence    = 0xFFFFFFFE  (MAX_SEQUENCE_NONFINAL — required for timelock)
+//   nSequence    = 0xFFFFFFFE  (MAX_SEQUENCE_NONFINAL - required for timelock)
 //   vout[0]      = (coinbasevalue, payout scriptPubKey)
 //   vout[1..]    = coinbase_required_outputs verbatim, in template order
 //   nLockTime    = height - 1                          (Elektron consensus)
@@ -32,6 +32,16 @@ import { ConfigService } from '@nestjs/config';
 
 const MAX_BLOCK_WEIGHT = 4000000;
 
+// Pool identity outputs (doc-elektron/guideline-pool-identity-op-return.md):
+// two informational, single-push OP_RETURN coinbase outputs, always appended
+// last, each tagged with its own 4-byte magic so elektron-net-mempool can
+// find them by content instead of by position. Neither magic starts with
+// 0xaa (the witness-commitment magic, 0xaa21a9ed), so a last-match scan for
+// the commitment can never pick these up instead of the real one.
+const POOL_IDENTITY_MAGIC_NAME = Buffer.from('EPNM', 'ascii'); // 0x45504e4d
+const POOL_IDENTITY_MAGIC_URL = Buffer.from('EPUR', 'ascii'); // 0x45505552
+const POOL_IDENTITY_MAX_TEXT_BYTES = 64;
+
 interface AddressObject {
     address: string;
     percent: number;
@@ -53,7 +63,7 @@ export class MiningJob {
     // Frozen at construction time. jobTemplate.block.version can belong to a
     // shared/cached template object that StratumV1Client's 500ms local work
     // refresh (BIP320 pool-side version-bit rotation) mutates in place for
-    // later jobs — reading jobTemplate.block.version again during share
+    // later jobs - reading jobTemplate.block.version again during share
     // validation or block submission would silently pick up a rotation
     // state that was never sent to the miner for *this* job.
     private jobVersion: number;
@@ -97,7 +107,7 @@ export class MiningJob {
             const heightLengthByte = Buffer.from([heightEncoded.length]);
             scriptSig = Buffer.concat([heightLengthByte, heightEncoded]);
             if (scriptSig.length < 2) {
-                scriptSig = Buffer.concat([scriptSig, Buffer.from([0x00])]); // OP_0 — bad-cb-length guard
+                scriptSig = Buffer.concat([scriptSig, Buffer.from([0x00])]); // OP_0 - bad-cb-length guard
             }
         }
         this.coinbaseTransaction.ins[0].script = scriptSig;
@@ -120,6 +130,12 @@ export class MiningJob {
             );
         }
 
+        // Pool identity (name, URL): always appended after the required
+        // outputs / witness-commitment fallback above, i.e. always last, so
+        // the node's first-match attestation scan and last-match commitment
+        // scan are unaffected. See doc-elektron/guideline-pool-identity-op-return.md.
+        this.appendPoolIdentityOutputs(configService);
+
         if ((this.coinbaseTransaction.weight() + jobTemplate.block.weight()) > MAX_BLOCK_WEIGHT) {
             throw new Error('Block weight exceeds the maximum allowed weight');
         }
@@ -132,12 +148,12 @@ export class MiningJob {
         // prevout, scriptSig length byte, scriptSig itself); coinb2 carries
         // nSequence, the output count, every output and nLockTime. This is
         // the split standard Stratum V1 clients (including ESP-Miner) expect
-        // — they read nSequence/outputs/nLockTime from coinb2 unconditionally
+        // - they read nSequence/outputs/nLockTime from coinb2 unconditionally
         // and fail to parse the job if coinb2 is empty. With
         // EXTRANONCE1_SIZE_BYTES = EXTRANONCE2_SIZE_BYTES = 0 nothing is
         // spliced between coinb1 and coinb2, so coinb1 + coinb2 reassembles
         // to exactly the same bytes as miner.py's `tx_no_witness` output.
-        //@ts-ignore — __toBuffer() skips the witness section.
+        //@ts-ignore - __toBuffer() skips the witness section.
         const fullCoinbaseBuffer: Buffer = this.coinbaseTransaction.__toBuffer();
         const coinbaseSplitOffset = 41 + 1 + scriptSig.length; // version(4)+incount(1)+prevout(36)+scriptSigLenByte(1)+scriptSig
         this.coinbasePart1 = fullCoinbaseBuffer.subarray(0, coinbaseSplitOffset).toString('hex');
@@ -154,7 +170,7 @@ export class MiningJob {
         // With EXTRANONCE_SIZE = 0 the worker can't change the coinbase, so the
         // hash is precisely the reassembled coinbasePart1Buffer + coinbasePart2Buffer
         // (=tx_no_witness). coinbasePart1Buffer alone is only the pre-scriptSig-end
-        // fragment since the coinb1/coinb2 split moved (see constructor) — hashing
+        // fragment since the coinb1/coinb2 split moved (see constructor) - hashing
         // it alone would hash a truncated, invalid coinbase transaction.
         const coinbaseHash = bitcoinjs.crypto.hash256(Buffer.concat([this.coinbasePart1Buffer, this.coinbasePart2Buffer]));
         const merkleRoot = this.calculateMerkleRootHash(coinbaseHash, this.merkleBranchBuffers);
@@ -180,7 +196,7 @@ export class MiningJob {
      * worker would, i.e. with `coinbaseSuffix` (typically extranonce1 || extranonce2)
      * appended to the canonical coinbase before hashing. Used to check whether
      * firmwares like NerdMiner V2 splice extranonce1 into the coinbase even
-     * when extranonce2_size = 0 — if shares validate at this header but not at
+     * when extranonce2_size = 0 - if shares validate at this header but not at
      * `buildHeaderBuffer`, the firmware is doing the classic splice.
      */
     public buildHeaderBufferWithCoinbaseSuffix(
@@ -233,7 +249,7 @@ export class MiningJob {
         // Clone the coinbase tx, append extraBytes to scriptSig, re-encode.
         const cloned = bitcoinjs.Transaction.fromBuffer(this.coinbaseTransaction.toBuffer());
         cloned.ins[0].script = Buffer.concat([cloned.ins[0].script, extraBytes]);
-        //@ts-ignore — __toBuffer() skips the witness section, matching tx_no_witness.
+        //@ts-ignore - __toBuffer() skips the witness section, matching tx_no_witness.
         const splicedCoinbase: Buffer = cloned.__toBuffer();
         return this.assembleHeader(jobTemplate, versionMask, nonce, splicedCoinbase, timestamp);
     }
@@ -272,7 +288,7 @@ export class MiningJob {
             return Object.assign(new bitcoinjs.Transaction(), tx);
         });
 
-        // Coinbase is the canonical miner.py-style tx — scriptSig untouched,
+        // Coinbase is the canonical miner.py-style tx - scriptSig untouched,
         // locktime baked in, required_outputs in template order. We submit it
         // verbatim, which is what miner.py does too.
         testBlock.transactions[0] = this.cloneCoinbaseTransaction();
@@ -318,7 +334,7 @@ export class MiningJob {
         coinbaseTransaction.version = 2;
         coinbaseTransaction.addInput(Buffer.alloc(32, 0), 0xffffffff, 0xfffffffe);
 
-        // Single payout: doc §5.5 forbids dev/pool-fee splits — attestation is
+        // Single payout: doc §5.5 forbids dev/pool-fee splits - attestation is
         // pinned to a single payout output.
         let rewardBalance = reward;
         addresses.forEach(recipientAddress => {
@@ -340,6 +356,55 @@ export class MiningJob {
             console.warn(`Invalid payout address ${address}: ${e.message ?? e}`);
             return Buffer.alloc(0);
         }
+    }
+
+    // Appends the pool-name and pool-URL identity outputs, each independently
+    // optional. POOL_IDENTIFIER already exists (off-chain, external share
+    // submission) and is reused here as the on-chain pool name; POOL_URL is
+    // new. Either is skipped entirely (no placeholder output) if unset, so a
+    // pool that configures neither gets byte-for-byte today's coinbase.
+    private appendPoolIdentityOutputs(configService: ConfigService): void {
+        const poolName = configService.get<string>('POOL_IDENTIFIER');
+        const poolUrl = configService.get<string>('POOL_URL');
+
+        this.appendPoolIdentityOutput(poolName, POOL_IDENTITY_MAGIC_NAME);
+        this.appendPoolIdentityOutput(poolUrl, POOL_IDENTITY_MAGIC_URL);
+    }
+
+    private appendPoolIdentityOutput(value: string | undefined | null, magic: Buffer): void {
+        if (!value) {
+            return;
+        }
+
+        const text = this.sanitizePoolIdentityText(value, POOL_IDENTITY_MAX_TEXT_BYTES);
+        if (text.length === 0) {
+            return;
+        }
+
+        // Single data push (magic || text) - never two pushes - so this can
+        // never be mistaken for the two-push <height><32 bytes> UTXO
+        // attestation shape, regardless of byte content.
+        const script = bitcoinjs.script.compile([bitcoinjs.opcodes.OP_RETURN, Buffer.concat([magic, text])]);
+        this.coinbaseTransaction.addOutput(script, 0);
+    }
+
+    // Strips bytes that do not round-trip as valid UTF-8 (e.g. a lone
+    // surrogate from malformed operator input) and truncates on a code-point
+    // boundary so a multi-byte character is never split.
+    private sanitizePoolIdentityText(raw: string, maxBytes: number): Buffer {
+        const cleaned = new TextDecoder('utf-8', { fatal: false })
+            .decode(Buffer.from(raw, 'utf8'))
+            .replace(/�/g, '');
+
+        let result = Buffer.alloc(0);
+        for (const codePoint of cleaned) {
+            const next = Buffer.concat([result, Buffer.from(codePoint, 'utf8')]);
+            if (next.length > maxBytes) {
+                break;
+            }
+            result = next;
+        }
+        return result;
     }
 
     public response(jobTemplate: IJobTemplate): string {

@@ -399,7 +399,7 @@ export class StratumV1Client {
                             const rawParams = (parsedMessage as { params?: unknown })?.params;
                             console.log(`  [diag] raw mining.submit params: ${JSON.stringify(rawParams)}`);
                         } catch {
-                            // ignore — diagnostic only
+                            // ignore - diagnostic only
                         }
                     }
                     const result = await this.handleMiningSubmission(miningSubmitMessage);
@@ -463,8 +463,18 @@ export class StratumV1Client {
             // assigned at subscribe time from isHobbyMiner(userAgent).
             const configured = Number(this.configService.get<string>('HOBBY_MINER_DIFFICULTY'));
             this.sessionDifficulty = Number.isFinite(configured) && configured > 0 ? configured : 0.001;
-        } else if (this.clientSubscription.userAgent === 'cpuminer') {
-            this.sessionDifficulty = 0.1;
+        } else if (this.isLowHashrateMiner(this.clientSubscription.userAgent)) {
+            // CPU/GPU software miners (cpuminer, ccminer, sgminer, ... -- see
+            // LOW_HASHRATE_USER_AGENTS default). Unlike the HOBBY branch
+            // above, this must NEVER change isHobbyMinerSession/extranonce1:
+            // these are Stratum-compliant clients that correctly splice a
+            // non-empty extranonce1 into their coinbase, which would make
+            // their merkle root diverge from the pool's canonical one and
+            // break share validation entirely (see the HOBBY vs NORMAL
+            // comment on the mining.subscribe response above). Only the
+            // starting difficulty is lowered here, nothing else.
+            const configured = Number(this.configService.get<string>('LOW_HASHRATE_DIFFICULTY'));
+            this.sessionDifficulty = Number.isFinite(configured) && configured > 0 ? configured : 0.1;
         }
 
         if (this.clientSuggestedDifficulty == null) {
@@ -492,7 +502,7 @@ export class StratumV1Client {
         // Tunable cadences for vardiff re-evaluation and template refresh.
         // High-end ASICs (Bitaxe Gamma, Antminer, Whatsminer) benefit from a
         // shorter template refresh because they exhaust the (nonce, version)
-        // search space inside a single ntime window — a faster tick keeps the
+        // search space inside a single ntime window - a faster tick keeps the
         // ntime advancing so they don't waste hashes on stale headers. Both
         // values are env-overridable and clamped to sane minimums so a typo
         // can't drop the pool into a tight spin loop.
@@ -768,7 +778,7 @@ export class StratumV1Client {
         // hypothesis about what the firmware splices into the coinbase, and
         // we log the resulting difficulty side by side. If exactly one
         // hypothesis consistently produces diff >= required while canonical
-        // stays ~0, we've identified the firmware's mangling — and can then
+        // stays ~0, we've identified the firmware's mangling - and can then
         // decide whether it's pool-fixable or needs a firmware patch.
         //
         // Env value is a comma-separated list of mode codes. Empty or unset
@@ -860,7 +870,7 @@ export class StratumV1Client {
                 // already in the window when RewardCalculatorService reads it.
                 // Recording it afterwards would systematically exclude every
                 // winning share from its own block's reward split (see concept
-                // doc §5.1 — independent of the coarser StratumV1ClientStatistics
+                // doc §5.1 - independent of the coarser StratumV1ClientStatistics
                 // buckets, which stay as-is for the dashboard/vardiff).
                 await this.pplnsShareLogService.record(this.clientAuthorization.address, submissionDifficulty, jobTemplate.blockData.height);
             } catch (e) {
@@ -883,7 +893,7 @@ export class StratumV1Client {
                 // (null RPC response per `submitblock`). Any other value is the
                 // node's rejection reason (e.g. `bad-utxo-attestation`). Only
                 // persist accepted blocks in the Found Blocks table and reset
-                // best-difficulty counters on a real win — otherwise rejected
+                // best-difficulty counters on a real win - otherwise rejected
                 // attempts would pollute the dashboard.
                 if (result === 'SUCCESS!') {
                     await this.blocksService.save({
@@ -901,7 +911,7 @@ export class StratumV1Client {
                         // PPLNS: split the actual coinbase value (subsidy + fees) among
                         // everyone who contributed shares in the PPLNS window, minus the
                         // pool fee. minerAddress above is who found it (for statistics
-                        // only) — the reward itself is shared, not sent to this miner alone.
+                        // only) - the reward itself is shared, not sent to this miner alone.
                         await this.rewardCalculatorService.processBlockFound(jobTemplate.blockData.height, jobTemplate.blockData.coinbasevalue);
                     } catch (e) {
                         console.error(`PPLNS reward calculation failed for block ${jobTemplate.blockData.height}: ${e?.message ?? e}`);
@@ -1054,7 +1064,7 @@ export class StratumV1Client {
         //   ""         -> {} (logging off)
         //   "all"      -> every supported mode
         //   "a,b,c"    -> the named modes (whitespace and case insensitive)
-        // Unknown tokens are silently dropped — the StartOS multiselect is
+        // Unknown tokens are silently dropped - the StartOS multiselect is
         // the source of truth for valid mode names.
         const ALL_MODES = [
             'canonical',
@@ -1080,6 +1090,24 @@ export class StratumV1Client {
         // userAgent reported in mining.subscribe. Configured via the
         // HOBBY_MINER_USER_AGENTS env var (comma-separated).
         const list = this.configService.get<string>('HOBBY_MINER_USER_AGENTS');
+        if (!list || list.trim() === '' || !userAgent) {
+            return false;
+        }
+        const needles = list.split(',').map(ua => ua.trim().toLowerCase()).filter(ua => ua.length > 0);
+        const haystack = userAgent.toLowerCase();
+        return needles.some(needle => haystack.includes(needle));
+    }
+
+    private isLowHashrateMiner(userAgent: string): boolean {
+        // CPU/GPU software-miner allow-list (cpuminer, ccminer, sgminer, ...).
+        // Deliberately separate from isHobbyMiner()/HOBBY_MINER_USER_AGENTS:
+        // this only ever affects sessionDifficulty (see initStratum()), never
+        // the mining.subscribe extranonce1 -- these miners are Stratum-
+        // compliant and must keep the empty extranonce1 that clean share
+        // validation depends on. Substring-matched case-insensitively against
+        // the userAgent reported in mining.subscribe. Configured via the
+        // LOW_HASHRATE_USER_AGENTS env var (comma-separated).
+        const list = this.configService.get<string>('LOW_HASHRATE_USER_AGENTS');
         if (!list || list.trim() === '' || !userAgent) {
             return false;
         }

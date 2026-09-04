@@ -90,4 +90,17 @@ export class PplnsController {
             payoutIntervalMinutes: Number.isFinite(payoutIntervalMinutes) ? payoutIntervalMinutes : DEFAULT_PAYOUT_INTERVAL_MINUTES,
         };
     }
+
+    // Same values MiningJob.ts embeds on-chain as the vout[3]/vout[4]
+    // OP_RETURN pool-identity outputs (doc-elektron/guideline-pool-identity-op-return.md)
+    // -- read directly from config rather than by parsing a coinbase, since
+    // the pool already knows its own configured identity. Purely a display
+    // convenience for elektron-net-ppool-ui; not used by MiningJob.ts itself.
+    @Get('pool/identity')
+    async getPoolIdentity() {
+        const name = this.configService.get<string>('POOL_IDENTIFIER')?.trim() || null;
+        const url = this.configService.get<string>('POOL_URL')?.trim() || null;
+
+        return { name, url };
+    }
 }
