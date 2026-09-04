@@ -512,7 +512,7 @@ export class StratumV1Client {
         // version bits (ELEKTRON_POOL_VERSION_BITS_MASK) on the already-cached
         // template and pushes a new mining.notify -- no getblocktemplate call,
         // so this scales with connected miners without extra node RPC load.
-        const workRefreshMs = this.getTunedIntervalMs('WORK_REFRESH_INTERVAL_MS', 500, 500);
+        const workRefreshMs = this.getTunedIntervalMs('WORK_REFRESH_INTERVAL_MS', 1000, 500);
 
         this.backgroundWork.push(
             setInterval(async () => {
