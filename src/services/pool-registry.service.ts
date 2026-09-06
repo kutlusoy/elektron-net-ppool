@@ -3,6 +3,8 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
 import { firstValueFrom } from 'rxjs';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // See doc-elektron/guideline-pool-registry-reporting.md. Replaces the
 // reverted on-chain pool-identity outputs: this pool reports blocks it
@@ -14,6 +16,17 @@ interface RegistryMempoolEntry {
     name: string;
     url: string;
 }
+
+// Baked-in fallback so this works out of the box on any existing
+// deployment's .env, with no MEMPOOL_REGISTRY_URL line at all -- only ever
+// overridden if the operator actually sets that variable.
+const DEFAULT_MEMPOOL_REGISTRY_URL = 'https://raw.githubusercontent.com/kutlusoy/elektron-net-registry/main';
+// Local, on-disk copy of the last successfully fetched mempools.txt, in the
+// same directory as the sqlite DB (already a persisted volume). Read first
+// on startup so this pool has a usable list immediately even if the
+// registry host is unreachable at boot, then kept in sync in the
+// background -- see doc-elektron/guideline-pool-registry-reporting.md.
+const LOCAL_REGISTRY_CACHE_PATH = './DB/mempools-registry.txt';
 
 const REGISTRY_POLL_INTERVAL_MS = 15 * 60 * 1000;
 // Comfortably longer than any mempool instance should ever take to receive
@@ -34,22 +47,50 @@ export class PoolRegistryService implements OnModuleInit {
     ) { }
 
     async onModuleInit(): Promise<void> {
+        this.loadLocalCache();
         await this.refreshRegistry();
+    }
+
+    private loadLocalCache(): void {
+        try {
+            const text = fs.readFileSync(LOCAL_REGISTRY_CACHE_PATH, 'utf8');
+            this.mempools = parseMempoolsRegistry(text);
+        } catch {
+            // No local cache yet (first run) -- fine, refreshRegistry() below
+            // will populate it as soon as the registry is reachable.
+        }
+    }
+
+    private saveLocalCache(text: string): void {
+        try {
+            fs.mkdirSync(path.dirname(LOCAL_REGISTRY_CACHE_PATH), { recursive: true });
+            fs.writeFileSync(LOCAL_REGISTRY_CACHE_PATH, text);
+        } catch (e) {
+            this.logger.warn(`Failed to save local mempool registry cache: ${(e as Error).message}`);
+        }
     }
 
     @Interval(REGISTRY_POLL_INTERVAL_MS)
     public async refreshRegistry(): Promise<void> {
-        const base = this.configService.get<string>('MEMPOOL_REGISTRY_URL')?.trim().replace(/\/$/, '');
-        if (!base) {
-            return;
-        }
+        const base = (this.configService.get<string>('MEMPOOL_REGISTRY_URL')?.trim() || DEFAULT_MEMPOOL_REGISTRY_URL).replace(/\/$/, '');
         try {
             const response = await firstValueFrom(this.httpService.get<string>(`${base}/mempools.txt`, {
                 responseType: 'text',
                 timeout: 10000,
             }));
-            this.mempools = parseMempoolsRegistry(response.data);
+            // Never let a fetch that returns garbage (a GitHub outage page,
+            // a redirect to an HTML error, etc.) wipe out an already-known
+            // good list -- only replace it once the response actually
+            // parses into at least one entry.
+            const entries = parseMempoolsRegistry(response.data);
+            if (entries.length > 0) {
+                this.mempools = entries;
+                this.saveLocalCache(response.data);
+            }
         } catch (e) {
+            // Registry unreachable (e.g. GitHub is down) -- keep whatever is
+            // already loaded (local cache or a previous successful fetch)
+            // rather than going empty.
             this.logger.warn(`Failed to refresh mempool registry from ${base}/mempools.txt: ${(e as Error).message}`);
         }
     }
