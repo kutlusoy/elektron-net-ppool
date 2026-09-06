@@ -31,6 +31,7 @@ import { ExternalSharesService } from '../services/external-shares.service';
 import { elektronMainnet, elektronRegtest } from '../utils/elektron-network';
 import { PplnsShareLogService } from '../ORM/pplns-shares/pplns-shares.service';
 import { RewardCalculatorService } from '../pplns/reward-calculator.service';
+import { PoolRegistryService } from '../services/pool-registry.service';
 
 const TRUE_DIFF_ONE = 2.695953529101131e67;
 const BLOCKED_USER_AGENT_LOG_INTERVAL_MS = 60 * 1000;
@@ -92,7 +93,8 @@ export class StratumV1Client {
         private readonly addressSettingsService: AddressSettingsService,
         private readonly externalSharesService: ExternalSharesService,
         private readonly pplnsShareLogService: PplnsShareLogService,
-        private readonly rewardCalculatorService: RewardCalculatorService
+        private readonly rewardCalculatorService: RewardCalculatorService,
+        private readonly poolRegistryService: PoolRegistryService
     ) {
 
         this.socket.on('data', (data: Buffer) => {
@@ -906,6 +908,7 @@ export class StratumV1Client {
 
                     await this.notificationService.notifySubscribersBlockFound(this.clientAuthorization.address, jobTemplate.blockData.height, updatedJobBlock, result);
                     await this.addressSettingsService.resetBestDifficultyAndShares();
+                    await this.poolRegistryService.reportBlockFound(updatedJobBlock.getId());
 
                     try {
                         // PPLNS: split the actual coinbase value (subsidy + fees) among

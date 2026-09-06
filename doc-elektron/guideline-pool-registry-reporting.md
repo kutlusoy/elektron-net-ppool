@@ -1,6 +1,6 @@
 # Elektron Net - `elektron-net-ppool` Pool Registry Reporting Guideline
 
-- **Version:** 0.1 (planning, nothing implemented yet)
+- **Version:** 0.2 (implemented on `reporegistry`, pending review/merge and live testing before `main`)
 - **Date:** September 6, 2026
 - **Audience:** `elektron-net-ppool` developers, PPLNS pool operators
 - **Reference implementation:** `src/controllers/pplns/pplns.controller.ts` (the existing `GET /pool/identity` endpoint this extends)
@@ -32,24 +32,25 @@ Reporting flow:
 
 This binds trust to control of the registered URL, not to a wallet or on-chain data, so it works the same way for this repo and `elektron-net-pool` alike.
 
-## 3. What Changes in This Repo
+## 3. What Changed in This Repo
 
-- **New updater task**: fetches `mempools.txt` from the registry, keeps a synced list of known explorer instances to report to.
-- **On block found**: loop over the synced `mempools.txt` list and send each a report (`POOL_IDENTIFIER`, block hash).
-- **New confirmation endpoint**, alongside the existing `GET /pool/identity`: accepts a block hash and answers whether this pool itself reported that exact block recently. Backed by a short-lived, in-memory record of recently-submitted block hashes (a small ring buffer or TTL map is enough; no database table needed). The exact path and payload shape must match what `elektron-net-mempool` expects, to be settled jointly before implementation.
+- **`src/services/pool-registry.service.ts`** (new): fetches `mempools.txt` from `${MEMPOOL_REGISTRY_URL}/mempools.txt` every 15 minutes (`@Interval`, plus once on module init), parses `"Name"; "URL";` lines (malformed lines skipped), and keeps the result in memory. Also owns a TTL map of recently-found block hashes (30-minute window, comfortably longer than any mempool should ever take to receive a report and call back).
+- **`reportBlockFound(blockHash)`**: records the hash locally, then POSTs `{ name: POOL_IDENTIFIER, blockHash }` to `<mempoolUrl>/api/v1/pool-registry/report` for every known mempool instance in parallel, 5-second timeout each, failures logged and otherwise ignored (best-effort, nothing else depends on it). Called from `StratumV1Client.ts` right after a found block is saved and notified, using the submitted block's real id (`updatedJobBlock.getId()`).
+- **`GET /pool/identity/confirm?blockHash=<hex>`** (new, `pplns.controller.ts`, alongside the existing `GET /pool/identity`): returns `{ confirmed, name, url }`, where `confirmed` is true only if this pool itself recorded finding that exact block hash recently.
+- **`MEMPOOL_REGISTRY_URL`** (new env var, `.env.example`): base URL of the registry repo (raw content, no trailing slash), defaults to the official `elektron-net-registry`.
 
-## 4. Open Questions
+## 4. Decisions Made
 
-1. Exact endpoint paths/payload shapes, to be agreed with `elektron-net-mempool` and kept identical to `elektron-net-pool`'s implementation.
-2. How long "recently found" needs to be remembered (must comfortably cover the slowest mempool's poll interval plus retries).
-3. Registry poll interval for `mempools.txt` on this side (should match whatever `elektron-net-mempool`'s document settles on for its own `pools.txt` poll, for consistency).
-4. Retry behavior if a listed mempool instance's report endpoint is temporarily unreachable.
+1. Report endpoint: `POST /api/v1/pool-registry/report`, body `{ name, blockHash }` (mempool side). Confirm endpoint: `GET /pool/identity/confirm?blockHash=<hex>` (this side), response `{ confirmed, name, url }`. Identical in `elektron-net-pool`.
+2. Recently-found window: 30 minutes.
+3. Registry poll interval: 15 minutes, both sides.
+4. Retry behavior: none. A report is fire-and-forget with a 5-second timeout; an unreachable mempool just never gets that block attributed, no queue or retry.
 
 ## 5. Checklist
 
-- [ ] `elektron-net-registry` repository created with `pools.txt` / `mempools.txt`
-- [ ] Registry updater task implemented (mirrors `pools-updater.ts` from `elektron-net-mempool`)
-- [ ] Report-on-block-found implemented
-- [ ] Confirmation endpoint implemented
-- [ ] Open questions above resolved and reflected here before implementation begins
-- [ ] Verified byte-identical behavior with `elektron-net-pool`'s implementation
+- [x] `elektron-net-registry` repository created with `pools.txt` / `mempools.txt`
+- [x] Registry updater task implemented (`pool-registry.service.ts`, simplified vs. `pools-updater.ts`: plain refetch on each poll rather than SHA-diffing, since these files are tiny)
+- [x] Report-on-block-found implemented
+- [x] Confirmation endpoint implemented
+- [x] Verified byte-identical behavior with `elektron-net-pool`'s implementation
+- [ ] Live-test on regtest/testnet (real found block, real report, real callback) before merging to `main`

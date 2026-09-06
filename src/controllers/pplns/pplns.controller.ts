@@ -1,8 +1,9 @@
-import { Controller, Get, Header, Param } from '@nestjs/common';
+import { Controller, Get, Header, Param, Query } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { PayoutLedgerService } from '../../ORM/payout-ledger/payout-ledger.service';
 import { PplnsShareLogService } from '../../ORM/pplns-shares/pplns-shares.service';
+import { PoolRegistryService } from '../../services/pool-registry.service';
 
 const DEFAULT_MIN_PAYOUT_THRESHOLD_SATS = 100000;
 const DEFAULT_PAYOUT_INTERVAL_MINUTES = 60;
@@ -20,6 +21,7 @@ export class PplnsController {
         private readonly payoutLedgerService: PayoutLedgerService,
         private readonly pplnsShareLogService: PplnsShareLogService,
         private readonly configService: ConfigService,
+        private readonly poolRegistryService: PoolRegistryService,
     ) {
     }
 
@@ -102,5 +104,19 @@ export class PplnsController {
         const url = this.configService.get<string>('POOL_URL')?.trim() || null;
 
         return { name, url };
+    }
+
+    // Callback target for elektron-net-mempool's report verification (see
+    // doc-elektron/guideline-pool-registry-reporting.md): confirms whether
+    // this pool itself actually reported the given block hash recently,
+    // rather than trusting a report at face value. No wallet, no signature -
+    // only the operator of this URL can ever answer "yes" honestly.
+    @Get('pool/identity/confirm')
+    async getPoolIdentityConfirm(@Query('blockHash') blockHash: string) {
+        const name = this.configService.get<string>('POOL_IDENTIFIER')?.trim() || null;
+        const url = this.configService.get<string>('POOL_URL')?.trim() || null;
+        const confirmed = typeof blockHash === 'string' && blockHash.length > 0 && this.poolRegistryService.wasRecentlyFound(blockHash);
+
+        return { confirmed, name, url };
     }
 }
