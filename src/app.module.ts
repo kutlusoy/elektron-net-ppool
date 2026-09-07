@@ -34,6 +34,7 @@ import { PplnsModule } from './pplns/pplns.module';
 import { PplnsController } from './controllers/pplns/pplns.controller';
 import { AuthModule } from './auth/auth.module';
 import { MinerAccountController } from './controllers/miner-account/miner-account.controller';
+import { PoolRegistryService } from './services/pool-registry.service';
 
 const ORMModules = [
     ClientStatisticsModule,
@@ -92,6 +93,7 @@ const ORMModules = [
         BraiinsService,
         ExternalSharesService,
         LogRotationService,
+        PoolRegistryService,
     ],
 })
 export class AppModule {

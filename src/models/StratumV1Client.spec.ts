@@ -51,6 +51,7 @@ describe('StratumV1Client', () => {
     let externalSharesService;
     let pplnsShareLogService;
     let rewardCalculatorService;
+    let poolRegistryService;
     let configService: ConfigService;
 
     let client: StratumV1Client;
@@ -180,6 +181,11 @@ describe('StratumV1Client', () => {
         rewardCalculatorService = {
             processBlockFound: jest.fn().mockResolvedValue(undefined)
         };
+        poolRegistryService = {
+            reportBlockFound: jest.fn().mockResolvedValue(undefined),
+            recordFoundBlock: jest.fn(),
+            wasRecentlyFound: jest.fn().mockReturnValue(false)
+        };
 
 
         client = new StratumV1Client(
@@ -194,7 +200,8 @@ describe('StratumV1Client', () => {
             addressSettings,
             externalSharesService,
             pplnsShareLogService,
-            rewardCalculatorService
+            rewardCalculatorService,
+            poolRegistryService
         );
 
         client.extraNonceAndSessionId = MockRecording1.EXTRA_NONCE;
@@ -305,7 +312,8 @@ describe('StratumV1Client', () => {
             moduleRef.get<AddressSettingsService>(AddressSettingsService),
             externalSharesService,
             pplnsShareLogService,
-            rewardCalculatorService
+            rewardCalculatorService,
+            poolRegistryService
         );
 
         socketEmitter(Buffer.from(`{"id":1,"method":"mining.subscribe","params":["NMMiner/1.0"]}\n`));
@@ -624,7 +632,8 @@ describe('StratumV1Client', () => {
             moduleRef.get<AddressSettingsService>(AddressSettingsService),
             externalSharesService,
             pplnsShareLogService,
-            rewardCalculatorService
+            rewardCalculatorService,
+            poolRegistryService
         );
         jest.spyOn(secondClient as any, 'write').mockImplementation((data) => Promise.resolve(true));
         jest.spyOn(secondClient as any, 'getRandomHexString').mockReturnValue(MockRecording1.EXTRA_NONCE);

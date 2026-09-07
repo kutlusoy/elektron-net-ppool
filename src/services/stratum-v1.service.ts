@@ -14,6 +14,7 @@ import { NotificationService } from './notification.service';
 import { StratumV1JobsService } from './stratum-v1-jobs.service';
 import { PplnsShareLogService } from '../ORM/pplns-shares/pplns-shares.service';
 import { RewardCalculatorService } from '../pplns/reward-calculator.service';
+import { PoolRegistryService } from './pool-registry.service';
 
 interface StratumListenerState {
     port: number;
@@ -49,7 +50,8 @@ export class StratumV1Service implements OnModuleInit {
         private readonly addressSettingsService: AddressSettingsService,
         private readonly externalSharesService: ExternalSharesService,
         private readonly pplnsShareLogService: PplnsShareLogService,
-        private readonly rewardCalculatorService: RewardCalculatorService
+        private readonly rewardCalculatorService: RewardCalculatorService,
+        private readonly poolRegistryService: PoolRegistryService
     ) {
 
     }
@@ -101,7 +103,8 @@ export class StratumV1Service implements OnModuleInit {
                 this.addressSettingsService,
                 this.externalSharesService,
                 this.pplnsShareLogService,
-                this.rewardCalculatorService
+                this.rewardCalculatorService,
+                this.poolRegistryService
             );
 
 
