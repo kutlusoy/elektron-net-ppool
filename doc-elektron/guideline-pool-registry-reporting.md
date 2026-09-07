@@ -18,8 +18,8 @@ Same as `elektron-net-pool`'s document: the reverted on-chain pool-identity feat
 
 A new repository, `github.com/kutlusoy/elektron-net-registry` (not created yet), holds two plain text files extended purely by fork + pull request:
 
-- `pools.txt`: one line per pool (both `ppool` and solo `pool`), format `"Name"; "URL";`
-- `mempools.txt`: one line per known block-explorer instance, same format
+- `pools.txt`: one line per pool (both `ppool` and solo `pool`), format `"Type", "Name", "URL";`
+- `mempools.txt`: one line per known block-explorer instance, format `"Name", "URL";`
 
 This repo consumes `mempools.txt` via a single configured registry URL (mirrors the polling/SHA-diffing pattern `elektron-net-mempool`'s `pools-updater.ts` already uses for `pools-v2.json`, generalized so one URL is enough).
 
@@ -34,7 +34,7 @@ This binds trust to control of the registered URL, not to a wallet or on-chain d
 
 ## 3. What Changed in This Repo
 
-- **`src/services/pool-registry.service.ts`** (new): fetches `mempools.txt` from `${MEMPOOL_REGISTRY_URL}/mempools.txt` every 15 minutes (`@Interval`, plus once on module init), parses `"Name"; "URL";` lines (malformed lines skipped), and keeps the result in memory. Also owns a TTL map of recently-found block hashes (30-minute window, comfortably longer than any mempool should ever take to receive a report and call back).
+- **`src/services/pool-registry.service.ts`** (new): fetches `mempools.txt` from `${MEMPOOL_REGISTRY_URL}/mempools.txt` every 15 minutes (`@Interval`, plus once on module init), parses `"Name", "URL";` lines by extracting every quoted substring on the line (agnostic to whatever separator sits between them), malformed lines skipped, and keeps the result in memory. Also owns a TTL map of recently-found block hashes (30-minute window, comfortably longer than any mempool should ever take to receive a report and call back).
 - **`reportBlockFound(blockHash)`**: records the hash locally, then POSTs `{ name: POOL_IDENTIFIER, blockHash }` to `<mempoolUrl>/api/v1/pool-registry/report` for every known mempool instance in parallel, 5-second timeout each, failures logged and otherwise ignored (best-effort, nothing else depends on it). Called from `StratumV1Client.ts` right after a found block is saved and notified, using the submitted block's real id (`updatedJobBlock.getId()`).
 - **`GET /pool/identity/confirm?blockHash=<hex>`** (new, `pplns.controller.ts`, alongside the existing `GET /pool/identity`): returns `{ confirmed, name, url }`, where `confirmed` is true only if this pool itself recorded finding that exact block hash recently.
 - **`MEMPOOL_REGISTRY_URL`** (new env var, `.env.example`, commented out/optional): base URL of the registry repo (raw content, no trailing slash). The default (`https://raw.githubusercontent.com/kutlusoy/elektron-net-registry/main`) is baked into `pool-registry.service.ts` itself, not just the `.env.example` comment, so an existing deployment that upgrades without touching its `.env` at all still works - the variable only ever overrides that default, it does not gate the feature.

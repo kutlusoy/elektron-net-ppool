@@ -142,6 +142,9 @@ export class PoolRegistryService implements OnModuleInit {
     }
 }
 
+// Only ever extracts quoted substrings, so it is agnostic to whatever
+// separator sits between them (comma, semicolon, or nothing) -- only the
+// quoted content is read.
 function parseMempoolsRegistry(text: string): RegistryMempoolEntry[] {
     const entries: RegistryMempoolEntry[] = [];
     for (const rawLine of (text ?? '').split('\n')) {
